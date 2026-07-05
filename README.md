@@ -34,6 +34,7 @@ Every purifier covered here at a glance — how it's converted to ESPHome, its s
 | [Everest Air](./devices/levoit-everest-air) | Levoit | 🟢 Flash / 🔵 Add ESP | 612 m³/h | 24–56 dB | Easy | [Guide](./devices/levoit-everest-air) | [Amazon](https://amzn.to/3Q1cMB) | ✅ Tested · vent louver, PM1.0/2.5/10, Turbo |
 | [Sprout](./devices/levoit-sprout) | Levoit | 🟢 Flash / 🔵 Add ESP | 145 m³/h | 22–47 dB | Easy | [Guide](./devices/levoit-sprout) | [Amazon](https://amzn.to/4oAJs1n) | 🚧 WIP · white-noise audio (I2S MP3) |
 | [LV-PUR 131S](./devices/levoit-lv131s/) | Levoit | 🔴 Custom HW | — | — | Medium | [Guide](./devices/levoit-lv131s/) | — | Custom FW + MCU & sensor upgrade |
+| [LV-PUR 131](./devices/levoit-lv131/) | Levoit | 🔴 Custom HW | — | — | Medium | [Guide](./devices/levoit-lv131/) | — | Custom FW + MCU upgrade |
 | [Levoit Mini](./devices/levoit-mini) | Levoit | 🔴 Custom HW | 78 m³/h | 41.8 – 53.6 dBA | Easy | [Guide](./devices/levoit-mini) | [Amazon](https://amzn.to/4acovEh) | Full custom PCB + 3D parts |
 | [Philips AC0650](./devices/philips-600-series) | Philips| 🔵 Add ESP | 170 m³/h | 19–49 dB | Easy | [Guide](./devices/philips-600-series) | [Amazon](https://amzn.to/4vS5Ohs) | ✅ Tested · secure boot → replace module; no AQ sensor |
 | [Philips AC0651](./devices/philips-600-series) | Philips| 🔵 Add ESP | 170 m³/h | 19–49 dB | Easy | [Guide](./devices/philips-600-series) | [Amazon](https://amzn.to/4elkSyg) | ✅ Tested · adds PM2.5 (PM1003) + Auto mode |
@@ -55,6 +56,10 @@ Every purifier covered here at a glance — how it's converted to ESPHome, its s
 
 
 ## Change Log 
+
+### 2026.07.04
+
+* Added Levoit LV-PUR 131 support
 
 ### 2026.06.20 
 
@@ -131,6 +136,7 @@ The Levoit Sprout additionally uses the [levoit_audio component](./components/le
 ### Other Models / Levoit Projects
 
 * [Levoit LV-PUR 131S](./devices/levoit-lv131s/) – Custom Firmware + MCU & sensor upgrade + hardware hack
+* [Levoit LV-PUR 131](./devices/levoit-lv131/) – Custom Firmware + MCU upgrade + hardware hack
 * [Levoit Mini](./devices/levoit-mini) – Custom PCB, 3D parts, hardware hack
 
 ### Features
@@ -213,6 +219,8 @@ The vent angle is set as a number entity (45° = nearly closed/upward, 90° = fu
 | Auto Mode Room Size | number | `efficiency_room_size` | Target room area for efficient auto mode in m² **Not for Core200S / EverestAir** |
 | Efficiency Counter | sensor | `efficiency_counter` | Seconds remaining at high fan speed in efficient auto mode **Vital only** |
 | Auto Mode High Fan Time | text_sensor | `auto_mode_room_size_high_fan` | Time still running at high speed in efficient auto mode, human readable **Vital only** |
+
+Auto Mode configures the purifier's automatic behavior and is distinct from the active fan preset/mode. On models with fan Auto support, changing Auto Mode enters the fan's Auto preset; direct fan speed changes switch the fan preset to Manual.
 
 Auto mode options per model:
 

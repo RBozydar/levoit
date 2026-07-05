@@ -1,7 +1,7 @@
 # Copilot Instructions for Free Levoit ESPHome Projects
 
 ## Project Overview
-This repository contains custom ESPHome firmware and hardware projects for various Levoit air purifiers, enabling local control and Home Assistant integration. Each model (Core 300S, Core 400S, Vital 100S, LV-PUR 131S, Mini) has its own folder with YAML configs, hardware notes, and model-specific instructions.
+This repository contains custom ESPHome firmware and hardware projects for various Levoit air purifiers, enabling local control and Home Assistant integration. Each model (Core 300S, Core 400S, Vital 100S, LV-PUR 131, LV-PUR 131S, Mini) has its own folder with YAML configs, hardware notes, and model-specific instructions.
 
 ## Architecture & Key Patterns
 - **YAML-Driven:** All device logic is in ESPHome YAML files (e.g., `levoit-vital100s/vital100-custom.yaml`). These define sensors, controls, automations, and custom effects.
