@@ -1,0 +1,120 @@
+# Same as example.yaml, but loads clock_clock from the LOCAL checkout instead
+# of git - handy while developing the component. Compile from the repo root
+# (or anywhere the `../` path resolves to the `components/` folder), e.g.:
+#
+#   esphome compile components/clock_clock/example.local.yaml
+
+esphome:
+  name: clockclock
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# --- load the component from this repo's local sources ----------------------
+external_components:
+  - source: ../          # the parent `components/` folder
+    components: [clock_clock]
+
+# --- a time source is required ----------------------------------------------
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+
+color:
+  - { id: c_gray,  red: 10%,  green: 10%, blue: 10% }
+
+# --- the clock face ---------------------------------------------------------
+clock_clock:
+  id: cc
+  time_id: sntp_time
+  transition_length: 2s     # how long the hands take to sweep to a new time
+  movement: opposite        # opposite | clockwise | counter | long
+  mode: rotate_left         # start spinning immediately at boot (Wi-Fi phase)
+  spacing: 0.0              # gap between HH and MM, in clock-widths
+  twenty_four_hour: true
+  hand_width: 1             # 1px suits ~128x64; use 3,5,7 on bigger panels
+  show_face: true          # true => draw a faint circle around each clock
+  clock_bg: c_gray         # each clock face   (needs show_face)
+  clock_border: c_gray      # each clock rim    (needs show_face)
+#  background: c_navy       # around the clocks (default black)
+#  clock_pointer: c_amber   # the hands
+
+# --- boot phases, wired in YAML (no network dependency in the component) -----
+#   Wi-Fi connecting        -> rotate_left  (spinner)
+#   connected, no time yet   -> flying_birds
+#   time is valid            -> show_time
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(sntp_time).now().is_valid();'
+          then:
+            - clock_clock.show_time: cc
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - clock_clock.flying_birds: cc
+                else:
+                  - clock_clock.rotate_left: cc
+
+# --- your display -----------------------------------------------------------
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  frequency: 400kHz
+font:
+
+  - file:
+      type: gfonts
+      family: Roboto
+      weight: 900
+    id: roboto_16
+    size: 16
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+display:
+  - platform: mipi_spi
+    model: "ST7735"
+    reset_pin: GPIO04
+    cs_pin: GPIO16
+    dc_pin: GPIO17
+    rotation: 0
+    dimensions:
+      width: 128
+      height: 160
+#    device_width: 128
+#    device_height: 160
+#    col_start: 0
+#    row_start: 0
+#    eight_bit_color: true
+    update_interval: 33ms
+    lambda: |-
+      //it.print(0, 10, id(roboto_16), "Hello World!");
+      id(cc).draw(it);
+#  - platform: ssd1306_i2c
+#    model: "SH1106 128x64"
+#    address: 0x3C
+#    update_interval: 33ms   # ~30 fps for smooth hand movement
+
+

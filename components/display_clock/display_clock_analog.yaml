@@ -1,0 +1,46 @@
+# Swiss-railway (SBB) analogue style for `display_clock`. Include just this file:
+#
+#   packages:
+#     clock: !include display_clock/display_clock_analog.yaml
+#
+# You still provide:
+#   - a time source (default id: sntp_time - override via substitutions below)
+#   - the display, and the draw call in its lambda / an interval:
+#       display backend:  id(dc).draw(it);
+#       LVGL canvas:      id(dc).draw_to_canvas(id(dc_canvas));
+#
+# Override the defaults from your main config, e.g.:
+#   substitutions:
+#     clock_time_id: my_time
+
+substitutions:
+  clock_id: dc
+  clock_time_id: sntp_time
+
+color:
+  - id: an_dial       # white dial
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: an_hands      # black hands / marks
+    red: 0%
+    green: 0%
+    blue: 0%
+  - id: an_second     # red second hand
+    red: 90%
+    green: 12%
+    blue: 12%
+
+display_clock:
+  id: ${clock_id}
+  time_id: ${clock_time_id}
+  foreground: an_hands       # black hands on the white dial
+  anti_alias: true           # smooth hands on colour/grayscale panels
+  analog:
+    show_face: true          # draw the dial
+    seconds: true            # red lollipop second hand
+    # ticks: true            # 60 marks + bold hour bars
+    # numerals: false        # needs a font: under the block
+    face_color: an_dial
+    border_color: an_hands   # rim + tick marks
+    second_color: an_second

@@ -1,0 +1,88 @@
+# display_clock on an LVGL 9 canvas, using a ready-made style include.
+# The whole clock is one `packages:` line - swap the include to change style.
+# Compile:  esphome compile components/display_clock/example.lvgl.yaml
+
+esphome:
+  name: display-clock-lvgl
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: ../
+    components: [display_clock]
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "CET-1CEST,M3.5.0,M10.5.0/3"
+
+# --- the whole clock, one line: pick a style ---------------------------------
+packages:
+  #clock: !include display_clock_digital.yaml
+  #clock: !include display_clock_analog.yaml
+  clock: !include display_clock_clockclock24.yaml   # use a wider canvas
+
+# --- display + LVGL canvas ---------------------------------------------------
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+display:
+  - platform: mipi_spi
+    id: my_display
+    model: "ST7735"
+    reset_pin: GPIO04
+    cs_pin: GPIO16
+    dc_pin: GPIO17
+    rotation: 0
+    dimensions:
+      width: 128
+      height: 160
+    update_interval: 33ms
+lvgl:
+  displays: [my_display]
+  rotation: 90
+  bg_color: 0x000000
+  widgets:
+    - canvas:
+        id: dc_canvas
+        width: 150
+        height: 128
+        bg_color: 0x000000
+        align: CENTER
+
+interval:
+  # redraw the canvas ~30 fps
+  - interval: 33ms
+    then:
+      - lambda: "id(dc).draw_to_canvas(id(dc_canvas));"
+  # boot phases (only affects the clockclock24 style; harmless for the others):
+  # spin while connecting, birds while waiting for NTP, then the time
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: "return id(sntp_time).now().is_valid();"
+          then:
+            - display_clock.show_time: dc
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - display_clock.flying_birds: dc
+                else:
+                  - display_clock.rotate_left: dc

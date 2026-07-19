@@ -1,0 +1,74 @@
+# display_clock on a plain ESPHome display, using a ready-made style include.
+# The whole clock is one `packages:` line - swap the include to change style.
+# (For every option shown inline instead, see the style files or the README.)
+# Compile:  esphome compile components/display_clock/example.local.yaml
+
+esphome:
+  name: display-clock
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: ../
+    components: [display_clock]
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "CET-1CEST,M3.5.0,M10.5.0/3"   # Berlin incl. DST
+
+# --- the whole clock, one line: pick a style ---------------------------------
+packages:
+  #clock: !include display_clock_analog.yaml
+  #clock: !include display_clock_digital.yaml
+  clock: !include display_clock_clockclock24.yaml
+
+# --- your display; draw the clock in its lambda ------------------------------
+spi:
+  clk_pin: GPIO18      # SCL/SCK
+  mosi_pin: GPIO23     # SDA/MOSI
+display:
+  - platform: mipi_spi
+    model: "ST7735"
+    reset_pin: GPIO04
+    cs_pin: GPIO16
+    dc_pin: GPIO17
+    rotation: 0
+    dimensions:
+      width: 128
+      height: 160
+    update_interval: 33ms
+    lambda: "id(dc).draw(it);"
+
+# boot phases (only affects the clockclock24 style; harmless for the others):
+# spin while connecting, birds while waiting for NTP, then the time
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: "return id(sntp_time).now().is_valid();"
+          then:
+            - display_clock.show_time: dc
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - display_clock.flying_birds: dc
+                else:
+                  - display_clock.rotate_left: dc

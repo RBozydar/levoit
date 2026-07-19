@@ -1,0 +1,97 @@
+# Example: "ClockClock 24" - a digital clock drawn out of 24 tiny analogue
+# clocks. Flash this to an ESP32 with an I2C OLED (SSD1306/SSD1327/etc.).
+#
+# The clock_clock component only *draws*; you bring your own `display:` and
+# call `id(cc).draw(it);` from its lambda, exactly like the `graph` component.
+
+esphome:
+  name: clockclock
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# --- pull in the component from this repo -----------------------------------
+external_components:
+  - source:
+      type: git
+      url: https://github.com/tuct/esphome-projects
+      ref: main
+    components: [clock_clock]
+
+# --- a time source is required ----------------------------------------------
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+
+# --- the clock face ---------------------------------------------------------
+clock_clock:
+  id: cc
+  time_id: sntp_time
+  transition_length: 3s     # how long the hands take to sweep to a new time
+  movement: opposite        # opposite | clockwise | counter | long
+  mode: rotate_left         # start spinning immediately at boot (Wi-Fi phase)
+  hand_width: 1             # 1px suits ~128x64; use 2-4 on bigger panels
+  spacing: 0.6              # gap between HH and MM, in clock-widths
+  twenty_four_hour: true
+  show_face: false          # true => draw a faint circle around each clock
+  # Colours are optional (default: white hands on black). On grayscale/RGB
+  # panels reference ids from a `color:` block, e.g.:
+  # background: c_navy       # around the clocks (default black)
+  # clock_bg: c_navy         # each clock face   (needs show_face)
+  # clock_border: c_rim      # each clock rim    (needs show_face)
+  # clock_pointer: c_amber   # the hands
+
+# color:
+#   - { id: c_amber, red: 100%, green: 65%, blue: 0% }
+#   - { id: c_navy,  red: 4%,   green: 6%,  blue: 16% }
+#   - { id: c_rim,   red: 20%,  green: 22%, blue: 30% }
+
+# --- boot phases: spinner while connecting, birds while waiting for NTP ------
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: 'return id(sntp_time).now().is_valid();'
+          then:
+            - clock_clock.show_time: cc
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - clock_clock.flying_birds: cc
+                else:
+                  - clock_clock.rotate_left: cc
+
+# --- your display -----------------------------------------------------------
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 33ms   # ~30 fps for smooth hand movement
+    lambda: |-
+      // fill the whole screen:
+      id(cc).draw(it);
+      // ...or draw into a sub-rectangle instead:
+      // id(cc).draw(it, 0, 0, it.get_width(), it.get_height());

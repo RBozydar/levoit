@@ -1,0 +1,88 @@
+# ClockClock rendered *inside* an LVGL UI (ESPHome uses LVGL 9).
+#
+# The component keeps everything - font, sweep animation, modes, colours - and
+# just draws into an `lv_canvas` widget instead of straight to the display. That
+# lets it live on an LVGL page next to your other widgets (tabs, labels, ...).
+#
+# Compile:  esphome compile components/clock_clock/example.lvgl.yaml
+
+esphome:
+  name: clockclock-lvgl
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+api:
+  encryption:
+    key: !secret api_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+external_components:
+  - source: ../          # the parent `components/` folder
+    components: [clock_clock]
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "CET-1CEST,M3.5.0,M10.5.0/3"   # Berlin incl. DST
+
+# --- a display for LVGL to drive (any lvgl-capable panel works) -------------
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+display:
+  - platform: ili9xxx
+    model: ili9341
+    id: my_display
+    cs_pin: GPIO5
+    dc_pin: GPIO2
+    reset_pin: GPIO4
+    auto_clear_enabled: false   # LVGL owns the framebuffer
+    update_interval: never
+
+# --- the LVGL UI, with a canvas the clock draws into ------------------------
+lvgl:
+  displays: [my_display]
+  widgets:
+    - canvas:
+        id: cc_canvas
+        width: 240
+        height: 96
+        bg_color: 0x000000
+        align: CENTER
+
+clock_clock:
+  id: cc
+  time_id: sntp_time
+  mode: rotate_left        # spin while connecting
+  show_face: true
+  hand_width: 2
+
+# --- drive it: ~30 fps redraw into the canvas + the boot-phase state machine -
+interval:
+  - interval: 33ms
+    then:
+      - lambda: "id(cc).draw_to_canvas(id(cc_canvas));"
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            lambda: "return id(sntp_time).now().is_valid();"
+          then:
+            - clock_clock.show_time: cc
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - clock_clock.flying_birds: cc
+                else:
+                  - clock_clock.rotate_left: cc
