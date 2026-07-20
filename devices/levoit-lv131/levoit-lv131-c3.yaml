@@ -1,5 +1,4 @@
 # Board: ESP32-C3 Super Mini (Generic)
-# This is basically the LV-131S definition with just a few changes. The same 500khz notice applies here too.
 
 esphome:
   name: lv-pur131
@@ -33,7 +32,7 @@ wifi:
   password: !secret wifi_password
   ap:
     ssid: LV-PUR131 Fallback Hotspot
-    password: "Litwo!OjczyznoMoja!TyJestesJakZdrowie."
+    password: !secret ap_password
   passive_scan: true
   on_connect: 
     - globals.set:
@@ -55,7 +54,7 @@ spi:
 spi_device:
     id: spidev
     cs_pin: GPIO03 #D1
-    data_rate: 200khz # use 500khz is possible esphome 2026.01+ required!
+    data_rate: 500khz
     spi_mode: 0
     bit_order: lsb_first   
 
@@ -86,6 +85,12 @@ uart:
             }
             id(btn_run_check)->stop();
             id(btn_run_check)->execute();
+
+  # PMS5003
+  - id: uart_sensor
+    rx_pin: GPIO08 #D8
+    tx_pin: GPIO09 #D9
+    baud_rate: 9600
 
 globals:
   - id: display_bits
@@ -135,15 +140,6 @@ switch:
     optimistic: true
     entity_category: CONFIG
     icon: "mdi:volume-high"
-  # active low heater control switch
-  - platform: gpio
-    pin: 
-      number: GPIO08 #D8
-      mode: OUTPUT
-    id: sensor_heater
-    inverted: true
-    restore_mode: ALWAYS_OFF
-    internal: true
 
 fan:
   - platform: template
@@ -159,10 +155,8 @@ fan:
     - script.execute: update_fan_speed
     on_turn_on:
     - script.execute: fan_turn_on
-    - switch.turn_on: sensor_heater  # turn on the sensor heater when the fan starts
     on_turn_off:
     - script.execute: fan_turn_off
-    - switch.turn_off: sensor_heater # turn off the sensor heater when the fan stops
     on_preset_set:
     - script.execute: fan_update_preset
     on_speed_set:
@@ -221,40 +215,30 @@ number:
           id(timer_text).publish_state(buf);
 
 sensor:      
-  # stock PM1003
-  # using id sensor_pm2_5 to references
-  - platform: pulse_width
-    name: 'PM10'
-    update_interval: 15s
-    id: sensor_pm2_5
-    state_class: measurement
-    device_class: pm10
-    icon: mdi:chemical-weapon
-    unit_of_measurement: 'µg/m³'
-    accuracy_decimals: 0
-    pin: 
-      number: GPIO07 #D5
-      inverted: true
-      mode:
-        input: true
-    on_value:
-      - script.execute: update_fan_speed
-    filters:
-      - round_to_multiple_of: 0.01
-      - calibrate_linear:
-          method: exact
-          datapoints:
-            - 0.0 -> 0.0
-            - 0.01 -> 0.0
-            - 0.1 -> 140
-            - 0.15 -> 210
-            - 0.20 -> 285
-            - 0.25 -> 300
-            - 1.1 -> 300
-      - round_to_multiple_of: 1    
-      - sliding_window_moving_average:
-          window_size: 3
-          send_every: 1
+  - platform: pmsx003
+    type: PMSX003
+    uart_id: uart_sensor
+    id: pms5003_hub
+    pm_1_0:
+      name: "PM <1.0µm"
+    pm_2_5:
+      name: "PM <2.5µm"
+      id: sensor_pm2_5
+      on_value:
+        - script.execute: update_fan_speed
+    pm_10_0:
+      name: "PM <10.0µm"      
+    update_interval: 60s
+
+  - platform: dht
+    id: dht_sensor
+    pin: GPIO07 #D5
+    temperature:
+      name: "Purifier Room Temperature"
+    humidity:
+      name: "Purifier Room Humidity"
+    model: DHT22
+    update_interval: 60s
 
   - platform: template
     name: "AQI - PM10"
@@ -464,6 +448,23 @@ button:
     icon: mdi:timer-outline
     on_press:
       - script.execute: cycle_timer
+  
+  - platform: template
+    name: "Refresh All Sensors"
+    id: refresh_sensors_btn
+    icon: "mdi:refresh"
+    on_press:
+      then:
+        - logger.log: "Manual sensor refresh triggered"
+        - component.update: dht_sensor
+        - script.execute: play_beep
+        - lambda: |-
+            // trick the PMS5003 into thinking an update is overdue
+            id(pms5003_hub)->set_update_interval(30005);
+        - delay: 35s
+        - lambda: |-
+            id(pms5003_hub)->set_update_interval(60000);
+        - logger.log: "PMS5003 manual refresh completed; returning to sleep."
 
 interval:
   - interval: 100ms
@@ -526,10 +527,8 @@ script:
               case 3: speed = 0.8f; break; 
               default: speed = 0.0f; break;
             }
-            //special speed for sleep
             if(ps=="Sleep") speed = 0.33f;
 
-            //if auto and clean air, turn off pwm, keep fan on!
             if(ps=="Auto" && id(sensor_pm2_5).state<=1.0f) speed = 0.0f;
             
           }
@@ -551,10 +550,9 @@ script:
     then:
       - lambda: |-
           auto ps = id(fan_lv131).get_preset_mode();
-          if (ps =="Auto"){
+          if (ps == "Auto"){
             ESP_LOGI("TS","from auto speed");
             auto aqi = id(aqi_pm10).state;
-            //only if different!!!!!  
             uint8_t new_speed = 1;
             if(aqi == 0.0) new_speed = 1;
             if(aqi == 1.0) new_speed = 1;
@@ -575,7 +573,7 @@ script:
     then:
       - lambda: |-
           auto ps = id(fan_lv131).get_preset_mode();
-          if(id(fan_lv131).state && ps==""){
+          if(id(fan_lv131).state && ps == ""){
             auto call = id(fan_lv131).turn_on();
             call.set_speed(2);
             call.perform();
