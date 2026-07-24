@@ -11,7 +11,7 @@
 
 Special:
 * [Levoit LV PUR 131s](./levoit-lv131s/) – Custom Firmware + MCU & sensor upgrade + hardware hack
-* [Levoit LV PUR 131](./levoit-lv131/) – Custom Firmware + MCU upgrade + hardware hack
+* [Levoit LV PUR 131](./levoit-lv131/) – Custom Firmware + temperature sensor + MCU & sensor upgrade + hardware hack
 * [Levoit Mini](./levoit-mini) – Custom PCB, 3D parts, hardware hack
 
 Core 200S/300S/400S and Vital100/200, only require disassembly to flash firmware (no hardware modifications needed). 
