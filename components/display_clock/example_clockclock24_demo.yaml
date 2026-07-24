@@ -4,7 +4,7 @@
 # `demo_interval` (default 5s) so you can watch the flip repeatedly without
 # waiting on real time. Demo mode itself never reads the real clock, but
 # `time: sntp` still requires some network component to be configured.
-# Compile:  esphome compile components/display_clock/example_demo.yaml
+# Compile:  esphome compile components/display_clock/example_clockclock24_demo.yaml
 
 esphome:
   name: display-clock-demo

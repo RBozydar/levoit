@@ -8,7 +8,7 @@ and redraws itself — no `interval:` + lambda glue needed. Pick a **style**:
 | --- | --- |
 | **clockclock24** *(default)* | A digital clock built from **24 tiny analogue clocks** ([ClockClock 24](https://clockclock.com/)); hands sweep to form the digits, with `rotate_left` / `flying_birds` idle animations. |
 | **analog** | A classic analogue clock face — independently configurable ticks and per-hand style/colour (see below). |
-| **digital** | `HH:MM(:SS)` as a rounded **7-segment** display with a "ghost 8", optional blinking colon. |
+| **digital** | `HH:MM(:SS)` as a **7-segment** display with a "ghost 8", optional blinking colon, and an AM/PM column in 12h mode. |
 | **flipclock** | `HH:MM(:SS)` as **split-flap cards** with real font-rendered digits and an animated flip on every change ([flipclock.js](https://flipclockjs.com/) look). |
 
 ## Usage
@@ -40,14 +40,15 @@ lvgl:
         show_seconds: true
 ```
 
-See [`example.lvgl.yaml`](./example.lvgl.yaml) for a full working config
-(display + LVGL setup + boot-phase idle animations). There's one per style -
-[`example.lvgl.yaml`](./example.lvgl.yaml) (clockclock24),
-[`example_analog.yaml`](./example_analog.yaml),
-[`example_digital.yaml`](./example_digital.yaml),
+See [`example_clockclock24.yaml`](./example_clockclock24.yaml) for a full
+working config (display + LVGL setup + boot-phase idle animations). There's
+one per style - [`example_clockclock24.yaml`](./example_clockclock24.yaml)
+(clockclock24), [`example_analog.yaml`](./example_analog.yaml)
+(plus [`example_analog_sbb.yaml`](./example_analog_sbb.yaml), a Mondaine/SBB
+showcase), [`example_digital.yaml`](./example_digital.yaml),
 [`example_flipclock.yaml`](./example_flipclock.yaml) - plus
-[`example_demo.yaml`](./example_demo.yaml) for the clockclock24 test mode
-below. They share their hardware/network setup via
+[`example_clockclock24_demo.yaml`](./example_clockclock24_demo.yaml) for the
+clockclock24 test mode below. They share their hardware/network setup via
 [`common_base.yaml`](./common_base.yaml) and their LVGL/colour setup via
 [`common_lvgl.yaml`](./common_lvgl.yaml), pulled in with `packages:` +
 `!include` - each example itself is just its `esphome: name:` plus the
@@ -71,7 +72,6 @@ provide, defaulting to `clockclock24` if none are given.
 | `style` | `clockclock24` | `clockclock24`, `analog`, `digital`, or `flipclock`. |
 | `twenty_four_hour` | `true` | `false` = 1–12. |
 | `show_seconds` | `false` | Adds `:SS` (`digital`/`flipclock`) or a sweeping second hand (`analog`). **No-op for `clockclock24`** — the physical ClockClock 24 has no seconds display. |
-| `show_date` / `show_date_format` | `false` / `short` | Accepted, but **not yet rendered** — reserved for a future date-display feature. |
 | `render_interval` | `33ms` | How often the widget redraws itself. |
 | `foreground` | white | The "ink": hands / markers / digits. |
 | `background` | black | Behind everything. |
@@ -117,15 +117,15 @@ takes to reach its new target angle:
 **Idle-animation actions** (drive from automations): `display_clock.show_time`,
 `display_clock.rotate_left`, `display_clock.flying_birds` — e.g. spin while
 Wi-Fi connects, birds while waiting for NTP, then the time. See
-[`example.lvgl.yaml`](./example.lvgl.yaml).
+[`example_clockclock24.yaml`](./example_clockclock24.yaml).
 
 **Testing the digit-flip animation** — clockclock24 only re-animates on an
 actual minute change, so watching it live can mean waiting up to 60 real
 seconds to see a flip. `mode: demo` (action: `display_clock.demo`) advances a
 fake internal minute every `demo_interval` (default `5s`) instead of reading
 the real clock, so you can watch the animation repeatedly on demand. See
-[`example_demo.yaml`](./example_demo.yaml) for a config that boots straight
-into it.
+[`example_clockclock24_demo.yaml`](./example_clockclock24_demo.yaml) for a
+config that boots straight into it.
 
 ## `style: analog`
 
@@ -212,9 +212,9 @@ digital:
 ```
 
 `segment_style` picks the shape of each of the 7 bars: `classic` *(default)*
-tapers each end to a point, meeting the neighbouring segment's point at the
-digit's corners — the traditional LCD/calculator look. `rounded` uses fully
-rounded capsule ends instead.
+tapers each end to a point — the traditional LCD/calculator look. `rounded`
+uses fully rounded capsule ends instead. Either way the segments are separated
+by a thin unlit gap, like a real 7-segment display.
 
 In 12h mode (`twenty_four_hour: false`) an **AM/PM** marker column appears on
 the left, like on a real LED clock module: AM on top, PM below, the active
@@ -263,8 +263,8 @@ recommended minimum, per style:
 
 | Style | Practical minimum |
 | --- | --- |
-| clockclock24 | ~128×48 (128×64 OLED is the sweet spot) |
-| analog | ~32×32 (bigger = more detail) |
+| clockclock24 | ~138×48 at the default spacing (a 128×64 OLED is close and works well) |
+| analog | ~24×24 (bigger = more detail) |
 | digital | ~24×12 (the 7-segment renderer is self-contained - no font, scales freely) |
 | flipclock | font-dependent - the cards scale, the glyphs don't; pick a font that fits |
 

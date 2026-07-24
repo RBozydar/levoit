@@ -1,6 +1,6 @@
 # display_clock - style: clockclock24 (24 tiny analogue clocks), with the
 # idle-animation actions driven from a boot-phase interval.
-# Compile:  esphome compile components/display_clock/example.lvgl.yaml
+# Compile:  esphome compile components/display_clock/example_clockclock24.yaml
 
 esphome:
   name: display-clock-lvgl

@@ -1,6 +1,6 @@
 # display_clock - style: analog, exercising every shared and analog-specific
 # option (see README.md for the full reference).
-# Compile:  esphome compile components/display_clock/example_analog.yaml
+# Compile:  esphome compile components/display_clock/example_analog_sbb.yaml
 
 esphome:
   name: display-clock-analog

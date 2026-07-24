@@ -54,13 +54,6 @@ enum SegmentStyle {
   SEGMENT_STYLE_ROUNDED,      // fully rounded capsule ends
 };
 
-// Not yet rendered (see README) - the fields exist so the config surface is
-// settled ahead of implementing the actual date drawing.
-enum DateFormat {
-  DATE_FORMAT_SHORT = 0,
-  DATE_FORMAT_LONG,
-};
-
 // clockclock24-only: idle animations, driven from YAML actions.
 enum ClockMode {
   CC_MODE_TIME = 0,
@@ -126,9 +119,6 @@ class DisplayClock : public Component, public lvgl::LvCompound {
     this->canvas_w_ = w;
     this->canvas_h_ = h;
   }
-  // Not yet rendered (see README) - accepted and stored for a future pass.
-  void set_show_date(bool show) { this->show_date_ = show; }
-  void set_date_format(DateFormat f) { this->date_format_ = f; }
   void set_render_interval(uint32_t ms) { this->render_interval_ms_ = ms; }
 
   // --- clockclock24 ---
@@ -338,8 +328,6 @@ class DisplayClock : public Component, public lvgl::LvCompound {
   // buffer pointer, which otherwise hard-crashes (StoreProhibited).
   bool render_ok_{true};
   bool show_seconds_{false};
-  bool show_date_{false};
-  DateFormat date_format_{DATE_FORMAT_SHORT};
   uint32_t render_interval_ms_{33};
   uint32_t last_render_ms_{0};
   int canvas_w_{0};

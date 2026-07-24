@@ -68,11 +68,6 @@ CENTER_STYLES = {
     "round": CenterStyle.CENTER_STYLE_ROUND,
     "none": CenterStyle.CENTER_STYLE_NONE,
 }
-DateFormat = display_clock_ns.enum("DateFormat")
-DATE_FORMATS = {
-    "short": DateFormat.DATE_FORMAT_SHORT,
-    "long": DateFormat.DATE_FORMAT_LONG,
-}
 SegmentStyle = display_clock_ns.enum("SegmentStyle")
 SEGMENT_STYLES = {
     "classic": SegmentStyle.SEGMENT_STYLE_CLASSIC,
@@ -113,8 +108,6 @@ CONF_SHOW_FACE = "show_face"
 CONF_FOREGROUND = "foreground"  # the "ink": hands / markers / digits
 CONF_BACKGROUND = "background"  # behind everything
 CONF_SHOW_SECONDS = "show_seconds"
-CONF_SHOW_DATE = "show_date"
-CONF_SHOW_DATE_FORMAT = "show_date_format"
 CONF_RENDER_INTERVAL = "render_interval"
 # face colours (styles that draw a dial / clock faces)
 CONF_FACE_COLOR = "face_color"  # dial / clock-face fill
@@ -294,11 +287,6 @@ WIDGET_SCHEMA = (
             cv.Optional(CONF_STYLE): cv.string_strict,
             cv.Optional(CONF_TWENTY_FOUR_HOUR, default=True): cv.boolean,
             cv.Optional(CONF_SHOW_SECONDS, default=False): cv.boolean,
-            # not yet rendered - see README
-            cv.Optional(CONF_SHOW_DATE, default=False): cv.boolean,
-            cv.Optional(CONF_SHOW_DATE_FORMAT, default="short"): cv.enum(
-                DATE_FORMATS, lower=True
-            ),
             cv.Optional(
                 CONF_RENDER_INTERVAL, default="33ms"
             ): cv.positive_time_period_milliseconds,
@@ -370,8 +358,6 @@ class DisplayClockWidgetType(WidgetType):
         lv_add(w.var.set_style(STYLES[style]))
         lv_add(w.var.set_twenty_four_hour(config[CONF_TWENTY_FOUR_HOUR]))
         lv_add(w.var.set_show_seconds(config[CONF_SHOW_SECONDS]))
-        lv_add(w.var.set_show_date(config[CONF_SHOW_DATE]))
-        lv_add(w.var.set_date_format(config[CONF_SHOW_DATE_FORMAT]))
         lv_add(w.var.set_render_interval(config[CONF_RENDER_INTERVAL].total_milliseconds))
         await _set_color(w.var, config, CONF_FOREGROUND, w.var.set_foreground)
         await _set_color(w.var, config, CONF_BACKGROUND, w.var.set_background)

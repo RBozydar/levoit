@@ -474,8 +474,30 @@ void DisplayClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *ds
     int stalk_len = hub_r * 3;
     dsc->width = std::max(1, R / 35);
     this->canvas_hand_(layer, dsc, cx, cy, stalk_len, angle_deg);
+    // Draw the thick baton with flat caps and add its rounded ends as
+    // explicit circles centred exactly on the tip / junction. LVGL's round
+    // line-caps drift ~1px off the shaft axis at some angles on integer
+    // coordinates (LV_USE_FLOAT is off), which made the tip "ball" look
+    // offset; a filled circle on the endpoint is always symmetric.
     dsc->width = baton_width;
+    dsc->round_start = dsc->round_end = false;
     this->canvas_hand_(layer, dsc, cx, cy, len, angle_deg, stalk_len);
+    dsc->round_start = dsc->round_end = true;  // restore for the next hand
+    float rad = angle_deg * PI_F / 180.0f;
+    // radius so the ball's diameter (2r+1) matches the shaft width rather than
+    // bulging a pixel past it on each side.
+    int r = std::max(1, (baton_width - 1) / 2);
+    lv_draw_rect_dsc_t ball;
+    lv_draw_rect_dsc_init(&ball);
+    ball.radius = LV_RADIUS_CIRCLE;
+    ball.bg_color = dsc->color;
+    ball.bg_opa = LV_OPA_COVER;
+    for (int d : {stalk_len, len}) {  // junction, then tip
+      int bx = cx + (int) lroundf(sinf(rad) * d);
+      int by = cy - (int) lroundf(cosf(rad) * d);
+      lv_area_t a = {bx - r, by - r, bx + r, by + r};
+      lv_draw_rect(layer, &ball, &a);
+    }
     if (tail_frac > 0.0f)
       this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
     return;
