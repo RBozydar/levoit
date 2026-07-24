@@ -1,0 +1,59 @@
+# Shared hardware/network boilerplate for the display_clock example_*.yaml
+# configs. Included via `packages:` - each example adds its own `esphome:`
+# name and `lvgl: widgets: - display_clock: ...` on top.
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      # +40KB usable RAM - meaningfully helps the canvas allocation budget.
+      sram1_as_iram: true
+      # Reduces binary size on rev >= 3.0 chips (flash, not heap, but free).
+      minimum_chip_revision: "3.1"
+
+logger:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+#api:
+#  encryption:
+#    key: !secret api_key
+#ota:
+#  - platform: esphome
+#    password: !secret ota_password
+
+external_components:
+  - source: ../
+    components: [display_clock]
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "CET-1CEST,M3.5.0,M10.5.0/3"
+
+# marker only - enables the display_clock widget, takes no options itself.
+display_clock:
+debug:
+  update_interval: 5s
+sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    min_free:
+      name: "Heap Min Free"
+    fragmentation:
+      name: "Heap Fragmentation"
+    loop_time:
+      name: "Loop Time"
+    cpu_frequency:
+      name: "CPU Frequency"
+
+#interval:
+#  - interval: 5s
+#    then:
+#      - lambda: |-
+#          ESP_LOGD("mem", "Free Heap Memory: %u bytes", (unsigned) esp_get_free_heap_size());

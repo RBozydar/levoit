@@ -1,0 +1,73 @@
+# display_clock - style: analog, exercising every shared and analog-specific
+# option (see README.md for the full reference).
+# Compile:  esphome compile components/display_clock/example_analog.yaml
+
+esphome:
+  name: display-clock-analog
+
+packages:
+  base: !include common_base.yaml
+  lvgl_colors: !include common_lvgl.yaml
+  display: !include tft_big.yaml
+
+# extra colours beyond common_lvgl.yaml's cc_hands/cc_bg/cc_faces, just to
+# make the per-hand/per-ring colour overrides visually distinct below.
+color:
+  - id: cc_minute
+    red: 60%
+    green: 80%
+    blue: 100%
+  - id: cc_second
+    red: 100%
+    green: 20%
+    blue: 20%
+  - id: cc_ticks_minor
+    red: 40%
+    green: 40%
+    blue: 40%
+
+lvgl:
+  widgets:
+    - display_clock:
+        id: dc
+        time_id: sntp_time
+        width: 221
+        height: 221
+        align: CENTER
+        style: analog
+        twenty_four_hour: true        # false = 1-12
+        foreground: cc_hands          # default "ink" - hour/minute hands, hub
+        background: cc_bg
+        show_seconds: true            # sweeping second hand
+        render_interval: 33ms         # how often the widget redraws itself
+        analog:
+          show_face: false
+          face_color: cc_faces               # dial fill (needs show_face)
+          border_color: cc_hands             # dial rim + default tick colour (needs show_face)
+          minute_ticks:                      # 60 small 1-min ticks
+            enabled: true
+            color: cc_ticks_minor              # defaults to border_color
+            rounded: false                       # rounded vs flat/square tick ends
+            width: s                             # s | m | l
+            length: s                             # s | m | l
+          hour_ticks:                        # 12 bold 5-min/hour ticks
+            enabled: true
+            color: cc_hands                     # defaults to border_color
+            rounded: false
+            width: l
+            length: s
+          hour_hand:
+            style: baton     # baton | line | lollipop | sbb 
+            color: cc_hands   # defaults to foreground
+            center_style: circle # circle | round | none
+            extend: 0% # extend hand to other side, max 50%
+          minute_hand:
+            style: baton
+            color: cc_hands   # defaults to foreground
+            center_style: circle # circle | round | none
+            extend: 0% # extend hand to other side, max 50%
+          second_hand:
+            style: line     # thin line + round "blob" partway along it
+            color: cc_second     # defaults to red
+            center_style: circle # circle | round | none
+            extend: 20% # extend hand to other side, max 50%

@@ -1,0 +1,39 @@
+# display_clock - style: flipclock, split-flap cards with font-rendered digits
+# (https://flipclockjs.com look). The font drives the digit size - pick one
+# that fits your card size (built-in LVGL montserrat_* or an ESPHome font:).
+# Compile:  esphome compile components/display_clock/example_flipclock.yaml
+
+esphome:
+  name: display-clock-flipclock
+
+packages:
+  base: !include common_base.yaml
+  lvgl_colors: !include common_lvgl.yaml
+  display: !include tft_big.yaml
+
+color:
+  - id: cc_card
+    red: 16%
+    green: 16%
+    blue: 16%
+
+lvgl:
+  widgets:
+    - display_clock:
+        id: dc
+        time_id: sntp_time
+        width: 320
+        height: 130
+        align: CENTER
+        style: flipclock
+        twenty_four_hour: false        # false = 1-12
+        foreground: cc_hands          # digit colour
+        background: cc_bg             # behind the cards + the seam line
+        show_seconds: false           # true = adds :SS (needs a smaller font)
+        flipclock:
+          font: montserrat_48         # built-in LVGL font, or an ESPHome font: id
+          card_color: cc_card         # card fill (defaults to a dark grey)
+          flip_duration: 450ms        # one digit flip; 0 = no animation
+          blink: false                # divider dots blink off
+          blank_leading_zero: false
+          show_dots: true

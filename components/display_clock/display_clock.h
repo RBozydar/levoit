@@ -1,30 +1,64 @@
 #pragma once
 
-#include "esphome/core/defines.h"
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/color.h"
 #include "esphome/components/time/real_time_clock.h"
-#include "esphome/components/display/display.h"
-
-#ifdef USE_LVGL
-#include <lvgl.h>
-#endif
+#include "esphome/components/lvgl/lvgl_esphome.h"
 
 namespace esphome {
 namespace display_clock {
 
-// A clock you draw onto any ESPHome display. Pick a `style`:
+// A clock rendered onto an LVGL 9 canvas. Pick a `style`:
 //   - clockclock24 : a digital clock made of 24 tiny analogue clocks
 //   - analog       : one classic analogue clock face
-//   - digital      : HH:MM(:SS) rendered with a font
-// It is a drawable helper (not a display driver): call `id(dc).draw(it);` from a
-// display lambda, like the `graph` component.
+//   - digital      : HH:MM(:SS) as a rounded 7-segment display
+//   - flipclock    : HH:MM(:SS) as split-flap cards with font-rendered digits
+// It's a native `lvgl:` widget: add it under `lvgl: widgets: - display_clock: ...`,
+// like `canvas` or `line`. It owns its canvas and redraws itself from loop().
 
 enum ClockStyle {
   STYLE_CLOCKCLOCK24 = 0,
   STYLE_ANALOG,
   STYLE_DIGITAL,
+  STYLE_FLIPCLOCK,
+};
+
+// analog-only: how a single hand is drawn.
+enum HandStyle {
+  HAND_STYLE_BATON = 0,    // thick rounded bar (default hour/minute look)
+  HAND_STYLE_LINE,         // thin plain line, no cap
+  HAND_STYLE_LOLLIPOP,     // thin line + a round "blob" partway along it
+  HAND_STYLE_SBB,          // tapered needle: wide at the pivot, a sharp point at the tip
+};
+
+// analog-only: how a hand's own centre marker is drawn (each hand draws its
+// own, stacked hour -> minute -> second so later ones nest on top).
+enum CenterStyle {
+  CENTER_STYLE_CIRCLE = 0,  // a ring in the hand's colour around a black centre
+  CENTER_STYLE_ROUND,       // a plain filled circle in the hand's colour
+  CENTER_STYLE_NONE,        // no centre marker for this hand
+};
+
+// analog-only: relative size for a tick ring's width or length (s/m/l -
+// "m" matches the previous hardcoded default look).
+enum TickSize {
+  TICK_SIZE_SMALL = 0,
+  TICK_SIZE_MEDIUM,
+  TICK_SIZE_LARGE,
+};
+
+// digital (seven-segment)-only: shape of each segment.
+enum SegmentStyle {
+  SEGMENT_STYLE_CLASSIC = 0,  // tapered/hexagonal ends meeting at pointed corners (LCD look)
+  SEGMENT_STYLE_ROUNDED,      // fully rounded capsule ends
+};
+
+// Not yet rendered (see README) - the fields exist so the config surface is
+// settled ahead of implementing the actual date drawing.
+enum DateFormat {
+  DATE_FORMAT_SHORT = 0,
+  DATE_FORMAT_LONG,
 };
 
 // clockclock24-only: idle animations, driven from YAML actions.
@@ -32,6 +66,10 @@ enum ClockMode {
   CC_MODE_TIME = 0,
   CC_MODE_ROTATE_LEFT,
   CC_MODE_FLYING_BIRDS,
+  // Testing aid: advances a fake minute counter every `demo_interval` instead
+  // of reading the real clock, so the digit-flip animation can be watched
+  // repeatedly without waiting on real time.
+  CC_MODE_DEMO,
 };
 
 // clockclock24-only: how the two hands travel to a new digit.
@@ -48,28 +86,22 @@ static const int NUM_CLOCKS = NUM_DIGITS * CLOCKS_PER_DIGIT;  // 24
 static const int NUM_HANDS = NUM_CLOCKS * 2;                  // 48
 
 // One glyph of the digital layout. val: 0-9 = digit, 10 = colon (on),
-// 11 = colon (blinked off), -1 = blank space, -2 = dash ("--:--").
+// 11 = colon (blinked off), 12 = AM/PM card (flipclock 12h mode),
+// -1 = blank space, -2 = dash ("--:--").
 struct DigitalCell {
   int val;
   int x, y, w, h;
 };
 
-class DisplayClock : public Component {
+// max cells one layout can produce: AM/PM card + HH + : + MM + : + SS
+static const int MAX_CELLS = 10;
+
+class DisplayClock : public Component, public lvgl::LvCompound {
  public:
   // --- shared ---
   void set_time(time::RealTimeClock *t) { this->time_ = t; }
   void set_style(ClockStyle s) { this->style_ = s; }
-  void set_position(int x, int y) {
-    this->cfg_x_ = x;
-    this->cfg_y_ = y;
-  }
-  void set_size(int w, int h) {
-    this->cfg_w_ = w;
-    this->cfg_h_ = h;
-  }
   void set_twenty_four_hour(bool on) { this->h24_ = on; }
-  void set_hand_width(int px) { this->hand_width_ = px; }
-  void set_anti_alias(bool on) { this->anti_alias_ = on; }
   void set_show_face(bool show) { this->show_face_ = show; }
   void set_foreground(Color c) { this->fg_ = c; }
   void set_background(Color c) { this->background_ = c; }
@@ -85,8 +117,22 @@ class DisplayClock : public Component {
     this->face_fill_ = c;
     this->has_face_fill_ = true;
   }
+  void set_show_seconds(bool show) { this->show_seconds_ = show; }
+  // Canvas size, known from config at codegen time - render_() uses this
+  // rather than lv_obj_get_width/height(this->obj), which isn't reliably
+  // resolved yet the first few times our own loop() runs (LVGL only
+  // computes actual layout during its own refresh pass).
+  void set_canvas_size(int w, int h) {
+    this->canvas_w_ = w;
+    this->canvas_h_ = h;
+  }
+  // Not yet rendered (see README) - accepted and stored for a future pass.
+  void set_show_date(bool show) { this->show_date_ = show; }
+  void set_date_format(DateFormat f) { this->date_format_ = f; }
+  void set_render_interval(uint32_t ms) { this->render_interval_ms_ = ms; }
 
   // --- clockclock24 ---
+  void set_hand_width(int px) { this->hand_width_ = px; }
   void set_transition_length(uint32_t ms) { this->transition_ms_ = ms; }
   void set_spacing(float clocks) { this->spacing_ = clocks; }
   void set_movement(MovementMode m) { this->movement_ = m; }
@@ -95,20 +141,53 @@ class DisplayClock : public Component {
   void set_time_mode() { this->set_mode(CC_MODE_TIME); }
   void set_rotate_left_mode() { this->set_mode(CC_MODE_ROTATE_LEFT); }
   void set_flying_birds_mode() { this->set_mode(CC_MODE_FLYING_BIRDS); }
+  void set_demo_mode() { this->set_mode(CC_MODE_DEMO); }
+  void set_demo_interval(uint32_t ms) { this->demo_interval_ms_ = ms; }
   ClockMode get_mode() const { return this->mode_; }
 
-  // --- analog ---
-  void set_analog_seconds(bool on) { this->analog_seconds_ = on; }
-  void set_analog_ticks(bool on) { this->analog_ticks_ = on; }
-  void set_analog_numerals(bool on) { this->analog_numerals_ = on; }
-  void set_analog_font(display::BaseFont *f) { this->analog_font_ = f; }
-  void set_second_color(Color c) {
+  // --- analog (classic) ---
+  void set_minute_ticks(bool on) { this->minute_ticks_ = on; }
+  void set_hour_ticks(bool on) { this->hour_ticks_ = on; }
+  void set_hour_ticks_rounded(bool on) { this->hour_ticks_rounded_ = on; }
+  void set_minute_ticks_rounded(bool on) { this->minute_ticks_rounded_ = on; }
+  void set_hour_ticks_width(TickSize s) { this->hour_ticks_width_ = s; }
+  void set_minute_ticks_width(TickSize s) { this->minute_ticks_width_ = s; }
+  void set_hour_ticks_length(TickSize s) { this->hour_ticks_length_ = s; }
+  void set_minute_ticks_length(TickSize s) { this->minute_ticks_length_ = s; }
+  void set_hour_ticks_color(Color c) {
+    this->hour_ticks_color_ = c;
+    this->has_hour_ticks_color_ = true;
+  }
+  void set_minute_ticks_color(Color c) {
+    this->minute_ticks_color_ = c;
+    this->has_minute_ticks_color_ = true;
+  }
+  void set_hour_hand_style(HandStyle s) { this->hour_hand_style_ = s; }
+  void set_minute_hand_style(HandStyle s) { this->minute_hand_style_ = s; }
+  void set_second_hand_style(HandStyle s) { this->second_hand_style_ = s; }
+  void set_hour_hand_color(Color c) {
+    this->hour_hand_ = c;
+    this->has_hour_hand_ = true;
+  }
+  void set_minute_hand_color(Color c) {
+    this->minute_hand_ = c;
+    this->has_minute_hand_ = true;
+  }
+  void set_second_hand_color(Color c) {
     this->second_ = c;
     this->has_second_ = true;
   }
+  void set_hour_center_style(CenterStyle s) { this->hour_center_style_ = s; }
+  void set_minute_center_style(CenterStyle s) { this->minute_center_style_ = s; }
+  void set_second_center_style(CenterStyle s) { this->second_center_style_ = s; }
+  // 0..0.5 - extends the hand a bit past the pivot on the opposite side (e.g.
+  // the second hand's small counterweight tail).
+  void set_hour_extend(float f) { this->hour_extend_ = f; }
+  void set_minute_extend(float f) { this->minute_extend_ = f; }
+  void set_second_extend(float f) { this->second_extend_ = f; }
 
-  // --- digital (7-segment) ---
-  void set_digital_seconds(bool on) { this->digital_seconds_ = on; }
+  // --- digital (seven-segment) ---
+  void set_segment_style(SegmentStyle s) { this->segment_style_ = s; }
   void set_digital_blink(bool on) { this->digital_blink_ = on; }
   void set_digital_blank_leading(bool on) { this->digital_blank_leading_ = on; }
   void set_digital_off_color(Color c) {
@@ -116,20 +195,30 @@ class DisplayClock : public Component {
     this->has_digital_off_ = true;
   }
 
+  // --- flipclock ---
+  // Takes either a built-in LVGL font (`&lv_font_montserrat_48`) or an
+  // ESPHome `font:` component - the second overload bridges the latter the
+  // same way lvgl_esphome.h's own style-setter overloads do.
+  void set_flip_font(const lv_font_t *f) { this->flip_font_ = f; }
+#if defined(USE_FONT) && defined(USE_LVGL_FONT)
+  void set_flip_font(const font::Font *f) { this->flip_font_ = f->get_lv_font(); }
+#endif
+  void set_card_color(Color c) {
+    this->card_color_ = c;
+    this->has_card_color_ = true;
+  }
+  void set_flip_duration(uint32_t ms) { this->flip_ms_ = ms; }
+  void set_flip_show_dots(bool on) { this->flip_show_dots_ = on; }
+  // Small AM/PM marker font, only drawn in 12h mode (twenty_four_hour: false).
+  void set_am_pm_font(const lv_font_t *f) { this->am_pm_font_ = f; }
+#if defined(USE_FONT) && defined(USE_LVGL_FONT)
+  void set_am_pm_font(const font::Font *f) { this->am_pm_font_ = f->get_lv_font(); }
+#endif
+
   void setup() override;
   void loop() override;
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
-
-  void draw(display::Display &disp);
-  void draw(display::Display &disp, int x, int y, int w, int h);
-  void draw(display::Display &disp, int x, int y, int w, int h, Color color);
-
-#ifdef USE_LVGL
-  // Draw into an LVGL canvas widget (LVGL 9). Currently the clockclock24 and
-  // analog styles are supported on canvas.
-  void draw_to_canvas(lv_obj_t *canvas);
-#endif
 
   int min_width() const;
   int min_height() const;
@@ -137,74 +226,127 @@ class DisplayClock : public Component {
  protected:
   // helpers
   bool now_hms_(int &hh, int &mm, int &ss);  // returns is_valid, applies 12/24h
+  // Like now_hms_, but falls back to a fake 00:15 + uptime-driven seconds
+  // when no valid time is available yet, so the face looks alive while
+  // waiting to sync. Used by every style except clockclock24, which keeps
+  // its own wifi-phase behaviour (blank/park + idle-animation actions).
+  void now_or_fake_hms_(int &hh, int &mm, int &ss);
   Color pointer_color_() const { return this->has_pointer_ ? this->pointer_ : this->fg_; }
   Color face_border_color_() const { return this->has_face_border_ ? this->face_border_ : this->fg_; }
   Color face_fill_color_() const { return this->has_face_fill_ ? this->face_fill_ : this->background_; }
   // Swiss railway second hand is red by default.
   Color second_color_() const { return this->has_second_ ? this->second_ : Color(0xE0, 0x30, 0x30); }
+  Color hour_hand_color_() const { return this->has_hour_hand_ ? this->hour_hand_ : this->pointer_color_(); }
+  Color minute_hand_color_() const { return this->has_minute_hand_ ? this->minute_hand_ : this->pointer_color_(); }
+  Color hour_tick_color_() const {
+    return this->has_hour_ticks_color_ ? this->hour_ticks_color_ : this->face_border_color_();
+  }
+  Color minute_tick_color_() const {
+    return this->has_minute_ticks_color_ ? this->minute_ticks_color_ : this->face_border_color_();
+  }
+  // Tick width in px and length as an "inner" fraction (0..1, distance from
+  // centre where the tick starts - the outer end is always at 0.96*R). One
+  // shared scale for hour and minute ticks - "s"/"m"/"l" mean the same
+  // absolute size on either (s = the old minute-tick default, l = the old
+  // hour-tick default, m = the midpoint; the schema defaults each ring to
+  // its own historical size - minute: s, hour: l).
+  static int tick_width_(int R, TickSize s);
+  static float tick_inner_(TickSize s);
   // Fraction (0..1) of the way through the current second, from millis - lets
   // all three hands sweep continuously instead of jumping.
   float sub_second_(int ss);
-  void draw_hand_(display::Display &disp, int cx, int cy, int len, float angle_deg, int width,
-                  Color color, Color bg);
-  // Thick segment with a solid core and, when anti_alias_ is on, an AA fringe.
-  void thick_line_(display::Display &disp, float x1, float y1, float x2, float y2, int width,
-                   Color color, Color bg);
-  // Xiaolin Wu anti-aliased line, blending `fg` toward `bg` at the edges.
-  void aa_line_(display::Display &disp, float x0, float y0, float x1, float y1, Color fg, Color bg);
-  static Color blend_(Color bg, Color fg, float a);
-
-  // per-style renderers (display backend)
-  void render_clockclock_(display::Display &disp, int x, int y, int w, int h, Color pointer);
-  void render_analog_(display::Display &disp, int x, int y, int w, int h, Color pointer);
-  void render_digital_(display::Display &disp, int x, int y, int w, int h, Color pointer);
-  void render_digital_seg_(display::Display &disp, int x, int y, int w, int h, Color color);
-
-  // shared 7-segment layout (both backends). seg_polys_ returns the active
-  // segments as tapered hexagons (6 points each) for the classic pointed-corner
-  // look.
-  int digital_cells_(int x, int y, int w, int h, DigitalCell out[8]);
-  // Fills all 7 segment bounding rects {x,y,w,h} and which are lit for `digit`
-  // (0-9, or -2 for a dash). Segments are drawn as rounded-end bars.
-  static void seg_rects_(int digit, int dx, int dy, int dw, int dh, int rects[7][4],
-                         bool active[7]);
   Color digital_off_color_() const {
     return this->has_digital_off_ ? this->digital_off_ : Color(0x22, 0x22, 0x22);
   }
+  Color flip_card_color_() const {
+    return this->has_card_color_ ? this->card_color_ : Color(0x2A, 0x2A, 0x2A);
+  }
+
+  // shared 7-segment layout. seg_rects_ returns each segment's bounding rect,
+  // orientation and which are lit for `digit` (0-9, or -2 for a dash).
+  int digital_cells_(int w, int h, DigitalCell out[MAX_CELLS]);
+  static void seg_rects_(int digit, int dx, int dy, int dw, int dh, int rects[7][4],
+                         bool active[7], bool horiz[7]);
 
   // clockclock24 animation engine
   void set_time_(int hh, int mm);
   void retarget_();
+  // Steps `cur_[]` toward `target_[]` per `transition_ms_` - shared by every
+  // mode that calls retarget_() (tick_time_, tick_demo_). Reads its own
+  // millis() rather than taking one from the caller - see the .cpp for why.
+  void advance_animation_();
   void tick_time_(uint32_t now_ms);
   void tick_rotate_(uint32_t now_ms);
   void tick_birds_(uint32_t now_ms);
+  void tick_demo_(uint32_t now_ms);
 
-#ifdef USE_LVGL
-  void canvas_clockclock_(lv_obj_t *canvas, int w, int h);
-  void canvas_analog_(lv_obj_t *canvas, int w, int h);
-  void canvas_digital_(lv_obj_t *canvas, int w, int h);
+  // rendering: draws the current state onto `this->obj` (owned lv_canvas_t)
+  void render_();
+  void canvas_clockclock_(int w, int h);
+  void canvas_analog_(int w, int h);
+  void canvas_digital_(int w, int h);
+  void canvas_flipclock_(int w, int h);
+  // One flip card (rounded rect + centred font glyph), drawn only inside the
+  // vertical band [clip_y1, clip_y2] - the flip animation renders the same
+  // card up to three times per frame with different bands/characters.
+  void flip_card_(lv_layer_t *layer, int x, int y, int w, int h, char ch, int clip_y1,
+                  int clip_y2, bool text_bottom = false);
   void canvas_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy, int len,
-                    float angle_deg);
-#endif
+                    float angle_deg, int start_len = 0);
+  // Draws one analog hand per its HandStyle: baton = thick rounded bar,
+  // line = thin bar, lollipop = thin bar + a hollow ring at 0.62*R.
+  // tail_frac (0 = none) adds a short line the opposite direction from the
+  // pivot, e.g. the second hand's small counterweight tail.
+  void canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy, int R,
+                           float angle_deg, HandStyle style, Color color, int baton_width,
+                           float len_frac, float tail_frac = 0.0f);
+  // sbb hand shape: a single triangle - wide flat base at the pivot,
+  // tapering to a sharp point at the tip. No rounded caps.
+  void canvas_sbb_hand_(lv_layer_t *layer, int cx, int cy, int len, float angle_deg, Color color,
+                       int base_width);
+  // One hand's own centre marker, radius `r` - circle = ring (colour) around
+  // a black centre, round = plain filled circle, none = nothing. Hands draw
+  // their own markers stacked hour -> minute -> second (see canvas_analog_),
+  // so give each hand a different `r` for a nested look.
+  void canvas_center_(lv_layer_t *layer, int cx, int cy, int r, CenterStyle style, Color color);
+  // Draws one 7-segment bar per segment_style_: rounded = capsule (rounded-end
+  // rect), classic = a core rect with a tapered triangular point at each end
+  // (the two ends the segment's *length* runs along - left/right if `horiz`,
+  // top/bottom otherwise), meeting the neighbouring segment's point exactly at
+  // the shared corner.
+  void canvas_draw_segment_(lv_layer_t *layer, int x, int y, int w, int h, bool horiz,
+                            lv_color_t color);
+  // Vector-stroke letters (A/M/P only) for the 7-segment AM/PM markers -
+  // keeps the digital style font-free, auto-scaling with the widget.
+  // lw/lh = one letter's width/height in px.
+  void canvas_stroke_text_(lv_layer_t *layer, const char *txt, float x, float y, float lw,
+                           float lh, lv_color_t color);
 
   // shared config
   time::RealTimeClock *time_{nullptr};
   ClockStyle style_{STYLE_CLOCKCLOCK24};
-  int cfg_x_{0};
-  int cfg_y_{0};
-  int cfg_w_{0};
-  int cfg_h_{0};
   bool h24_{true};
-  int hand_width_{1};
-  bool anti_alias_{false};
   bool show_face_{false};
   Color fg_{Color(255, 255, 255)};
   Color background_{Color(0, 0, 0)};
-  Color pointer_{}, face_border_{}, face_fill_{}, second_{};
+  Color pointer_{}, face_border_{}, face_fill_{}, second_{}, hour_hand_{}, minute_hand_{};
   bool has_pointer_{false}, has_face_border_{false}, has_face_fill_{false}, has_second_{false};
+  bool has_hour_hand_{false}, has_minute_hand_{false};
   bool size_checked_{false};
+  // False if the canvas draw buffer failed to allocate (logged once in
+  // render_()) - render_() then bails out instead of writing through a null
+  // buffer pointer, which otherwise hard-crashes (StoreProhibited).
+  bool render_ok_{true};
+  bool show_seconds_{false};
+  bool show_date_{false};
+  DateFormat date_format_{DATE_FORMAT_SHORT};
+  uint32_t render_interval_ms_{33};
+  uint32_t last_render_ms_{0};
+  int canvas_w_{0};
+  int canvas_h_{0};
 
   // clockclock24
+  int hand_width_{1};
   uint32_t transition_ms_{2000};
   float spacing_{0.6f};
   MovementMode movement_{CC_MOVE_OPPOSITE};
@@ -217,21 +359,58 @@ class DisplayClock : public Component {
   float target_[NUM_HANDS];
   bool animating_{false};
   uint32_t anim_start_{0};
+  uint32_t demo_interval_ms_{5000};
+  uint32_t demo_last_ms_{0};
+  int demo_min_{0};
 
-  // analog (Swiss railway style)
-  bool analog_seconds_{false};
-  bool analog_ticks_{true};
-  bool analog_numerals_{false};
-  display::BaseFont *analog_font_{nullptr};
+  // analog (classic)
+  bool minute_ticks_{true};
+  bool hour_ticks_{true};
+  bool hour_ticks_rounded_{true};
+  bool minute_ticks_rounded_{true};
+  TickSize hour_ticks_width_{TICK_SIZE_LARGE};
+  TickSize minute_ticks_width_{TICK_SIZE_SMALL};
+  TickSize hour_ticks_length_{TICK_SIZE_LARGE};
+  TickSize minute_ticks_length_{TICK_SIZE_SMALL};
+  Color hour_ticks_color_{}, minute_ticks_color_{};
+  bool has_hour_ticks_color_{false}, has_minute_ticks_color_{false};
+  HandStyle hour_hand_style_{HAND_STYLE_BATON};
+  HandStyle minute_hand_style_{HAND_STYLE_BATON};
+  HandStyle second_hand_style_{HAND_STYLE_LOLLIPOP};
+  CenterStyle hour_center_style_{CENTER_STYLE_CIRCLE};
+  CenterStyle minute_center_style_{CENTER_STYLE_CIRCLE};
+  CenterStyle second_center_style_{CENTER_STYLE_CIRCLE};
+  float hour_extend_{0.0f};
+  float minute_extend_{0.0f};
+  float second_extend_{0.0f};
   int last_sec_{-1};
   uint32_t last_sec_ms_{0};
 
-  // digital (7-segment)
-  bool digital_seconds_{false};
+  // digital (seven-segment)
+  SegmentStyle segment_style_{SEGMENT_STYLE_CLASSIC};
   bool digital_blink_{false};
   bool digital_blank_leading_{false};
   Color digital_off_{};
   bool has_digital_off_{false};
+  // left-hand AM/PM column, computed by digital_cells_ each layout pass
+  // (w == 0 when unused, i.e. 24h mode or non-7-segment styles)
+  int ampm_x_{0}, ampm_y_{0}, ampm_w_{0}, ampm_h_{0};
+
+  // flipclock
+  const lv_font_t *flip_font_{nullptr};
+  const lv_font_t *am_pm_font_{nullptr};
+  Color card_color_{};
+  bool has_card_color_{false};
+  uint32_t flip_ms_{450};
+  bool flip_show_dots_{true};
+  // whether the current (real) time is >= 12:00 - set by now_hms_ before its
+  // 12h conversion; false while running on the pre-sync fake time.
+  bool pm_{false};
+  // per-cell flip state, indexed like digital_cells_' output (colon slots
+  // unused). 0 = never shown yet (first render adopts without animating).
+  char flip_shown_[MAX_CELLS]{};
+  char flip_prev_[MAX_CELLS]{};
+  uint32_t flip_start_[MAX_CELLS]{};
 };
 
 // Action for clockclock24 idle animations: display_clock.show_time / .rotate_left

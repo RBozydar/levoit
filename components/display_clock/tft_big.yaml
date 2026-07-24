@@ -1,0 +1,15 @@
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+  miso_pin: GPIO19
+
+display:
+  - platform: mipi_spi
+    id: my_display
+    model: "ST7796"
+    reset_pin: GPIO04
+    cs_pin: GPIO16
+    dc_pin: GPIO17
+    dimensions:
+      width: 320
+      height: 480

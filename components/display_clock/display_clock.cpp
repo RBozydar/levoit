@@ -50,12 +50,25 @@ bool DisplayClock::now_hms_(int &hh, int &mm, int &ss) {
   hh = t.hour;
   mm = t.minute;
   ss = t.second;
+  this->pm_ = hh >= 12;  // captured before the 12h conversion loses it
   if (!this->h24_) {
     hh = hh % 12;
     if (hh == 0)
       hh = 12;
   }
   return true;
+}
+
+void DisplayClock::now_or_fake_hms_(int &hh, int &mm, int &ss) {
+  if (this->now_hms_(hh, mm, ss))
+    return;
+  // No valid time yet - show 00:15 (a nice pose: analog hands aren't stacked
+  // on top of each other) with the seconds running off uptime, so every
+  // style looks alive while waiting to sync.
+  hh = this->h24_ ? 0 : 12;
+  mm = 15;
+  ss = (int) ((millis() / 1000) % 60);
+  this->pm_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +128,29 @@ void DisplayClock::retarget_() {
   this->animating_ = true;
 }
 
+void DisplayClock::advance_animation_() {
+  if (!this->animating_)
+    return;
+  // Read a fresh timestamp rather than accepting one from the caller: retarget_()
+  // may have just set anim_start_ via its own, later millis() call, and an
+  // earlier/stale now_ms here would underflow (anim_start_ > now_ms) and snap
+  // the transition to "complete" on the very frame it started.
+  uint32_t now_ms = millis();
+  float t = (this->transition_ms_ == 0) ? 1.0f
+                                        : (now_ms - this->anim_start_) / (float) this->transition_ms_;
+  if (t >= 1.0f) {
+    for (int i = 0; i < NUM_HANDS; i++) {
+      float f = fmodf(this->target_[i], 360.0f);
+      this->cur_[i] = (f < 0) ? f + 360.0f : f;
+    }
+    this->animating_ = false;
+  } else {
+    float e = ease(t);
+    for (int i = 0; i < NUM_HANDS; i++)
+      this->cur_[i] = this->start_[i] + (this->target_[i] - this->start_[i]) * e;
+  }
+}
+
 void DisplayClock::tick_time_(uint32_t now_ms) {
   int hh, mm, ss;
   if (this->now_hms_(hh, mm, ss)) {
@@ -125,21 +161,7 @@ void DisplayClock::tick_time_(uint32_t now_ms) {
       this->retarget_();
     }
   }
-  if (this->animating_) {
-    float t = (this->transition_ms_ == 0) ? 1.0f
-                                          : (now_ms - this->anim_start_) / (float) this->transition_ms_;
-    if (t >= 1.0f) {
-      for (int i = 0; i < NUM_HANDS; i++) {
-        float f = fmodf(this->target_[i], 360.0f);
-        this->cur_[i] = (f < 0) ? f + 360.0f : f;
-      }
-      this->animating_ = false;
-    } else {
-      float e = ease(t);
-      for (int i = 0; i < NUM_HANDS; i++)
-        this->cur_[i] = this->start_[i] + (this->target_[i] - this->start_[i]) * e;
-    }
-  }
+  this->advance_animation_();
 }
 
 void DisplayClock::tick_rotate_(uint32_t now_ms) {
@@ -161,6 +183,27 @@ void DisplayClock::tick_birds_(uint32_t now_ms) {
   }
 }
 
+void DisplayClock::tick_demo_(uint32_t now_ms) {
+  if (now_ms - this->demo_last_ms_ >= this->demo_interval_ms_) {
+    this->demo_last_ms_ = now_ms;
+    this->demo_min_ = (this->demo_min_ + 1) % (24 * 60);
+  }
+  int hh = this->demo_min_ / 60;
+  int mm = this->demo_min_ % 60;
+  if (!this->h24_) {
+    hh = hh % 12;
+    if (hh == 0)
+      hh = 12;
+  }
+  int key = hh * 100 + mm;
+  if (key != this->last_key_) {
+    this->last_key_ = key;
+    this->set_time_(hh, mm);
+    this->retarget_();
+  }
+  this->advance_animation_();
+}
+
 void DisplayClock::set_mode(ClockMode m) {
   if (m == this->mode_)
     return;
@@ -168,188 +211,41 @@ void DisplayClock::set_mode(ClockMode m) {
   if (m == CC_MODE_TIME) {
     this->last_key_ = -1;
     this->animating_ = false;
+  } else if (m == CC_MODE_DEMO) {
+    this->last_key_ = -1;
+    this->demo_min_ = 0;
+    this->demo_last_ms_ = 0;
   }
 }
 
 void DisplayClock::loop() {
-  if (this->style_ != STYLE_CLOCKCLOCK24)
-    return;  // analog / digital compute straight from now() at draw time
   uint32_t now_ms = millis();
-  switch (this->mode_) {
-    case CC_MODE_ROTATE_LEFT:
-      this->tick_rotate_(now_ms);
-      break;
-    case CC_MODE_FLYING_BIRDS:
-      this->tick_birds_(now_ms);
-      break;
-    case CC_MODE_TIME:
-    default:
-      this->tick_time_(now_ms);
-      break;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// drawing (display backend)
-// ---------------------------------------------------------------------------
-Color DisplayClock::blend_(Color bg, Color fg, float a) {
-  if (a <= 0.0f)
-    return bg;
-  if (a >= 1.0f)
-    return fg;
-  uint8_t r = bg.r + (int) lroundf((fg.r - bg.r) * a);
-  uint8_t g = bg.g + (int) lroundf((fg.g - bg.g) * a);
-  uint8_t b = bg.b + (int) lroundf((fg.b - bg.b) * a);
-  return Color(r, g, b);
-}
-
-// Xiaolin Wu's line algorithm - plots edge pixels with fractional coverage.
-void DisplayClock::aa_line_(display::Display &disp, float x0, float y0, float x1, float y1, Color fg,
-                            Color bg) {
-  auto ipart = [](float x) { return floorf(x); };
-  auto fpart = [](float x) { return x - floorf(x); };
-  auto rfpart = [&](float x) { return 1.0f - fpart(x); };
-  auto plot = [&](int x, int y, float c) {
-    if (c > 0.02f)
-      disp.draw_pixel_at(x, y, blend_(bg, fg, c));
-  };
-  bool steep = fabsf(y1 - y0) > fabsf(x1 - x0);
-  if (steep) {
-    std::swap(x0, y0);
-    std::swap(x1, y1);
-  }
-  if (x0 > x1) {
-    std::swap(x0, x1);
-    std::swap(y0, y1);
-  }
-  float dx = x1 - x0, dy = y1 - y0;
-  float grad = (dx == 0.0f) ? 1.0f : dy / dx;
-  float intery = y0 + grad * (roundf(x0) - x0) + grad;
-  int xpxl1 = (int) roundf(x0);
-  int xpxl2 = (int) roundf(x1);
-  // endpoints (approximate - the hands are long, endpoints barely matter)
-  for (int x = xpxl1; x <= xpxl2; x++) {
-    float yy = (x == xpxl1) ? (y0 + grad * (x - x0)) : intery;
-    int yl = (int) ipart(yy);
-    if (steep) {
-      plot(yl, x, rfpart(yy));
-      plot(yl + 1, x, fpart(yy));
-    } else {
-      plot(x, yl, rfpart(yy));
-      plot(x, yl + 1, fpart(yy));
+  if (this->style_ == STYLE_CLOCKCLOCK24) {
+    switch (this->mode_) {
+      case CC_MODE_ROTATE_LEFT:
+        this->tick_rotate_(now_ms);
+        break;
+      case CC_MODE_FLYING_BIRDS:
+        this->tick_birds_(now_ms);
+        break;
+      case CC_MODE_DEMO:
+        this->tick_demo_(now_ms);
+        break;
+      case CC_MODE_TIME:
+      default:
+        this->tick_time_(now_ms);
+        break;
     }
-    if (x != xpxl1)
-      intery += grad;
   }
-}
-
-void DisplayClock::thick_line_(display::Display &disp, float x1, float y1, float x2, float y2,
-                               int width, Color color, Color bg) {
-  float dx = x2 - x1, dy = y2 - y1;
-  float len = sqrtf(dx * dx + dy * dy);
-  float px = (len < 0.001f) ? 0.0f : -dy / len;  // perpendicular unit
-  float py = (len < 0.001f) ? 0.0f : dx / len;
-  int half = (width - 1) / 2;
-  int ix1 = (int) lroundf(x1), iy1 = (int) lroundf(y1);
-  int ix2 = (int) lroundf(x2), iy2 = (int) lroundf(y2);
-  // solid core
-  for (int i = 0; i < width; i++) {
-    int off = i - half;
-    int ox = (int) lroundf(px * off), oy = (int) lroundf(py * off);
-    disp.line(ix1 + ox, iy1 + oy, ix2 + ox, iy2 + oy, color);
-  }
-  // anti-aliased fringe just outside each long edge
-  if (this->anti_alias_) {
-    float edges[2] = {-half - 0.5f, (width - 1 - half) + 0.5f};
-    for (float off : edges)
-      this->aa_line_(disp, x1 + px * off, y1 + py * off, x2 + px * off, y2 + py * off, color, bg);
-  }
-}
-
-void DisplayClock::draw_hand_(display::Display &disp, int cx, int cy, int len, float angle_deg,
-                              int width, Color color, Color bg) {
-  float rad = angle_deg * PI_F / 180.0f;
-  float exf = cx + sinf(rad) * len, eyf = cy - cosf(rad) * len;
-  this->thick_line_(disp, cx, cy, exf, eyf, width, color, bg);
-}
-
-void DisplayClock::draw(display::Display &disp) {
-  int x = this->cfg_x_;
-  int y = this->cfg_y_;
-  int w = (this->cfg_w_ > 0) ? this->cfg_w_ : (disp.get_width() - x);
-  int h = (this->cfg_h_ > 0) ? this->cfg_h_ : (disp.get_height() - y);
-  this->draw(disp, x, y, w, h);
-}
-
-void DisplayClock::draw(display::Display &disp, int x, int y, int w, int h) {
-  this->draw(disp, x, y, w, h, this->pointer_color_());
-}
-
-void DisplayClock::draw(display::Display &disp, int x, int y, int w, int h, Color color) {
-  if (!this->size_checked_) {
-    this->size_checked_ = true;
-    int mw = this->min_width(), mh = this->min_height();
-    if (w < mw || h < mh)
-      ESP_LOGW(TAG, "Draw area %dx%d px is below the recommended minimum %dx%d", w, h, mw, mh);
-    else
-      ESP_LOGI(TAG, "Draw area %dx%d px (min %dx%d) - OK", w, h, mw, mh);
-  }
-  switch (this->style_) {
-    case STYLE_ANALOG:
-      this->render_analog_(disp, x, y, w, h, color);
-      break;
-    case STYLE_DIGITAL:
-      this->render_digital_(disp, x, y, w, h, color);
-      break;
-    case STYLE_CLOCKCLOCK24:
-    default:
-      this->render_clockclock_(disp, x, y, w, h, color);
-      break;
-  }
-}
-
-void DisplayClock::render_clockclock_(display::Display &disp, int x, int y, int w, int h,
-                                      Color pointer) {
-  disp.filled_rectangle(x, y, w, h, this->background_);
-  float cols = 8.0f + this->spacing_;
-  float rows = 3.0f;
-  // Odd cell/diameter -> every clock has a true centre pixel, so the hands
-  // pivot cleanly (an even diameter puts the centre between pixels and the
-  // spinning hands jump). Drop to the next odd down; it always still fits.
-  int cell = (int) std::min((float) w / cols, (float) h / rows);
-  if ((cell & 1) == 0)
-    cell -= 1;
-  if (cell < 3)
+  if (this->obj == nullptr || now_ms - this->last_render_ms_ < this->render_interval_ms_)
     return;
-  int radius = cell / 2;  // (cell-1)/2; drawn face diameter is 2*radius+1
-  int len = (int) (radius * 0.86f);
-  float grid_w = cell * cols, grid_h = cell * rows;
-  int ox = x + (int) lroundf((w - grid_w) / 2.0f);
-  int oy = y + (int) lroundf((h - grid_h) / 2.0f);
-  Color face = this->face_fill_color_();
-  Color border = this->face_border_color_();
-  for (int c = 0; c < NUM_CLOCKS; c++) {
-    int digit = c / CLOCKS_PER_DIGIT;
-    int cell_i = c % CLOCKS_PER_DIGIT;
-    int col = cell_i % 2;
-    int row = cell_i / 2;
-    float gcol = digit * 2 + col + (digit >= 2 ? this->spacing_ : 0.0f);
-    int ccx = ox + (int) lroundf(gcol * cell) + radius;  // integer centre
-    int ccy = oy + row * cell + radius;
-    if (this->show_face_ && radius > 3) {
-      disp.filled_circle(ccx, ccy, radius - 1, face);
-      disp.circle(ccx, ccy, radius - 1, border);
-    }
-    float a0 = this->cur_[c * 2 + 0];
-    float a1 = this->cur_[c * 2 + 1];
-    Color hand_bg = this->show_face_ ? face : this->background_;
-    this->draw_hand_(disp, ccx, ccy, len, a0, this->hand_width_, pointer, hand_bg);
-    float delta = fmodf(fabsf(a1 - a0), 360.0f);
-    if (delta > 0.5f && delta < 359.5f)
-      this->draw_hand_(disp, ccx, ccy, len, a1, this->hand_width_, pointer, hand_bg);
-  }
+  this->last_render_ms_ = now_ms;
+  this->render_();
 }
 
+// ---------------------------------------------------------------------------
+// digital (seven-segment) layout
+// ---------------------------------------------------------------------------
 float DisplayClock::sub_second_(int ss) {
   uint32_t now = millis();
   if (ss != this->last_sec_) {
@@ -360,77 +256,11 @@ float DisplayClock::sub_second_(int ss) {
   return (frac > 1.0f) ? 1.0f : frac;
 }
 
-void DisplayClock::render_analog_(display::Display &disp, int x, int y, int w, int h, Color pointer) {
-  // Swiss railway (SBB) style: bold bar markers, baton hands, red paddle second.
-  disp.filled_rectangle(x, y, w, h, this->background_);
-  int cx = x + w / 2, cy = y + h / 2;
-  int R = std::min(w, h) / 2 - 1;
-  if (R < 6)
-    return;
-  Color border = this->face_border_color_();
-  if (this->show_face_) {
-    disp.filled_circle(cx, cy, R, this->face_fill_color_());
-    disp.circle(cx, cy, R, border);
-  }
-  if (this->analog_ticks_) {
-    int hour_w = std::max(2, R / 18);
-    Color tbg = this->show_face_ ? this->face_fill_color_() : this->background_;
-    for (int i = 0; i < 60; i++) {
-      bool hour = (i % 5 == 0);
-      float a = i * 6.0f * PI_F / 180.0f;
-      float inner = hour ? 0.74f : 0.89f;
-      float x1 = cx + sinf(a) * R * inner;
-      float y1 = cy - cosf(a) * R * inner;
-      float x2 = cx + sinf(a) * R * 0.96f;
-      float y2 = cy - cosf(a) * R * 0.96f;
-      this->thick_line_(disp, x1, y1, x2, y2, hour ? hour_w : 1, border, tbg);
-    }
-  }
-  if (this->analog_numerals_ && this->analog_font_ != nullptr) {
-    for (int n = 1; n <= 12; n++) {
-      float a = n * 30.0f * PI_F / 180.0f;
-      int nx = cx + (int) lroundf(sinf(a) * R * 0.62f);
-      int ny = cy - (int) lroundf(cosf(a) * R * 0.62f);
-      disp.printf(nx, ny, this->analog_font_, pointer, display::TextAlign::CENTER, "%d", n);
-    }
-  }
-  int hh, mm, ss;
-  if (this->now_hms_(hh, mm, ss)) {
-    // Continuous sweep: every hand glides, none jump or pause.
-    float cs = ss + this->sub_second_(ss);  // 0..60
-    float cm = mm + cs / 60.0f;             // continuous minutes
-    float ch = (hh % 12) + cm / 60.0f;      // continuous hours
-    float hour_a = ch * 30.0f;
-    float min_a = cm * 6.0f;
-    Color abg = this->show_face_ ? this->face_fill_color_() : this->background_;
-    this->draw_hand_(disp, cx, cy, (int) (R * 0.55f), hour_a, std::max(this->hand_width_ + 2, R / 12),
-                     pointer, abg);
-    this->draw_hand_(disp, cx, cy, (int) (R * 0.82f), min_a, std::max(this->hand_width_ + 1, R / 16),
-                     pointer, abg);
-    if (this->analog_seconds_) {
-      float sec_a = cs * 6.0f;
-      Color sc = this->second_color_();
-      this->draw_hand_(disp, cx, cy, (int) (R * 0.90f), sec_a, 1, sc, abg);
-      // the paddle / lollipop about two-thirds out
-      float ar = sec_a * PI_F / 180.0f;
-      int px = cx + (int) lroundf(sinf(ar) * R * 0.62f);
-      int py = cy - (int) lroundf(cosf(ar) * R * 0.62f);
-      disp.filled_circle(px, py, std::max(2, R / 11), sc);
-    }
-  }
-  disp.filled_circle(cx, cy, std::max(2, R / 14), pointer);
-}
-
-void DisplayClock::render_digital_(display::Display &disp, int x, int y, int w, int h, Color pointer) {
-  disp.filled_rectangle(x, y, w, h, this->background_);
-  this->render_digital_seg_(disp, x, y, w, h, pointer);  // self-contained 7-segment
-}
-
 // segment on/off bitmask per digit (a=1,b=2,c=4,d=8,e=16,f=32,g=64)
 static const uint8_t SEG7[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
 void DisplayClock::seg_rects_(int digit, int dx, int dy, int dw, int dh, int rects[7][4],
-                              bool active[7]) {
+                              bool active[7], bool horiz[7]) {
   int t = std::max(2, dw / 6);
   int vh = (dh - 3 * t) / 2;
   if (vh < t)
@@ -442,79 +272,83 @@ void DisplayClock::seg_rects_(int digit, int dx, int dy, int dw, int dh, int rec
       {1, dx + t, yd, dw - 2 * t}, {0, dx, y2, vh},              {0, dx, dy + t, vh},
       {1, dx + t, y1, dw - 2 * t},
   };
+  // shrink each segment along its length so the (classic) tapered tips stop
+  // short of the corners, leaving a visible dark gap between segments - the
+  // thin unlit lines of a real 7-segment display.
+  int g = std::max(1, t / 2);
   int mask = (digit >= 0 && digit <= 9) ? SEG7[digit] : (digit == -2 ? (1 << 6) : 0);
   for (int i = 0; i < 7; i++) {
     active[i] = mask & (1 << i);
     int hz = seg[i][0];
-    rects[i][0] = seg[i][1];
-    rects[i][1] = seg[i][2];
-    rects[i][2] = hz ? seg[i][3] : t;  // w
-    rects[i][3] = hz ? t : seg[i][3];  // h
+    horiz[i] = hz;
+    int len = std::max(1, seg[i][3] - 2 * g);
+    rects[i][0] = seg[i][1] + (hz ? g : 0);
+    rects[i][1] = seg[i][2] + (hz ? 0 : g);
+    rects[i][2] = hz ? len : t;  // w
+    rects[i][3] = hz ? t : len;  // h
   }
 }
 
-// A rounded-end bar (capsule): core rectangle + a circle at each end.
-static void capsule_disp_(display::Display &disp, int x, int y, int w, int h, Color col) {
-  int r = std::min(w, h) / 2;
-  if (r < 1) {
-    disp.filled_rectangle(x, y, w, h, col);
-    return;
-  }
-  if (w >= h) {  // horizontal
-    disp.filled_rectangle(x + r, y, w - 2 * r, h, col);
-    disp.filled_circle(x + r, y + r, r, col);
-    disp.filled_circle(x + w - r - 1, y + r, r, col);
-  } else {  // vertical
-    disp.filled_rectangle(x, y + r, w, h - 2 * r, col);
-    disp.filled_circle(x + r, y + r, r, col);
-    disp.filled_circle(x + r, y + h - r - 1, r, col);
-  }
-}
-
-int DisplayClock::digital_cells_(int x, int y, int w, int h, DigitalCell out[8]) {
-  x += 1;
+int DisplayClock::digital_cells_(int w, int h, DigitalCell out[MAX_CELLS]) {
+  int x = 1;
   w -= 2;  // small margin so the rounded ends never clip at the edges
   int hh, mm, ss;
-  bool valid = this->now_hms_(hh, mm, ss);
+  this->now_or_fake_hms_(hh, mm, ss);  // fake 00:15 + uptime seconds pre-sync
   bool colon_on = !(this->digital_blink_ && ((millis() / 1000) & 1));
   int colon_val = colon_on ? 10 : 11;
-  int vals[8];
+  // flipclock can drop the divider cells entirely (show_dots: false) - the
+  // groups are then only separated by the normal inter-card gap.
+  bool dividers = !(this->style_ == STYLE_FLIPCLOCK && !this->flip_show_dots_);
+  // flipclock 12h: a dedicated AM/PM card in front (val 12); 7-segment 12h
+  // instead reserves a narrow left column drawn by canvas_digital_.
+  bool ampm_card = (this->style_ == STYLE_FLIPCLOCK && !this->h24_);
+  int vals[MAX_CELLS];
   int nv = 0;
-  if (!valid) {
-    vals[nv++] = -2;
-    vals[nv++] = -2;
+  if (ampm_card)
+    vals[nv++] = 12;
+  vals[nv++] = (this->digital_blank_leading_ && hh < 10) ? -1 : hh / 10;
+  vals[nv++] = hh % 10;
+  if (dividers)
     vals[nv++] = colon_val;
-    vals[nv++] = -2;
-    vals[nv++] = -2;
-    if (this->digital_seconds_) {
+  vals[nv++] = mm / 10;
+  vals[nv++] = mm % 10;
+  if (this->show_seconds_) {
+    if (dividers)
       vals[nv++] = colon_val;
-      vals[nv++] = -2;
-      vals[nv++] = -2;
-    }
-  } else {
-    vals[nv++] = (this->digital_blank_leading_ && hh < 10) ? -1 : hh / 10;
-    vals[nv++] = hh % 10;
-    vals[nv++] = colon_val;
-    vals[nv++] = mm / 10;
-    vals[nv++] = mm % 10;
-    if (this->digital_seconds_) {
-      vals[nv++] = colon_val;
-      vals[nv++] = ss / 10;
-      vals[nv++] = ss % 10;
-    }
+    vals[nv++] = ss / 10;
+    vals[nv++] = ss % 10;
   }
   const float GAP = 0.18f, COLON_W = 0.45f;
+  // 12h 7-segment: reserve a left-hand column for the AM/PM markers (drawn
+  // by canvas_digital_), sized like a slightly narrow digit.
+  const float AMPM_W = 0.8f;
+  bool ampm = (this->style_ == STYLE_DIGITAL && !this->h24_);
   auto uw = [&](int v) { return (v == 10 || v == 11) ? COLON_W : 1.0f; };
   float units = (nv - 1) * GAP;
   for (int i = 0; i < nv; i++)
     units += uw(vals[i]);
+  if (ampm)
+    units += AMPM_W + GAP;
   float dwf = w / units;                                       // one digit width
-  int dh = (int) std::min((float) h, dwf * 1.9f);
-  int dy = y + (h - dh) / 2;
+  // flip cards are squarer than 7-segment digits (~1.45 vs 1.9 tall)
+  float aspect = (this->style_ == STYLE_FLIPCLOCK) ? 1.45f : 1.9f;
+  int dh = (int) std::min((float) h, dwf * aspect);
+  int dy = (h - dh) / 2;
   float total = (nv - 1) * GAP * dwf;
   for (int i = 0; i < nv; i++)
     total += uw(vals[i]) * dwf;
+  float band = ampm ? (AMPM_W + GAP) * dwf : 0.0f;
+  total += band;
   float cur = x + (w - total) / 2.0f;
+  if (ampm) {
+    this->ampm_x_ = (int) lroundf(cur);
+    this->ampm_y_ = dy;
+    this->ampm_w_ = (int) lroundf(AMPM_W * dwf);
+    this->ampm_h_ = dh;
+  } else {
+    this->ampm_w_ = 0;
+  }
+  cur += band;
   for (int i = 0; i < nv; i++) {
     float cwf = uw(vals[i]) * dwf;
     out[i] = {vals[i], (int) lroundf(cur), dy, (int) lroundf(cwf), dh};
@@ -523,35 +357,13 @@ int DisplayClock::digital_cells_(int x, int y, int w, int h, DigitalCell out[8])
   return nv;
 }
 
-void DisplayClock::render_digital_seg_(display::Display &disp, int x, int y, int w, int h,
-                                       Color color) {
-  DigitalCell cells[8];
-  int n = this->digital_cells_(x, y, w, h, cells);
-  Color off = this->digital_off_color_();
-  for (int i = 0; i < n; i++) {
-    DigitalCell &c = cells[i];
-    if (c.val == 10 || c.val == 11) {  // colon: on = foreground, blinked off = ghost
-      Color cc = (c.val == 10) ? color : off;
-      int r = std::max(1, c.w / 3);
-      disp.filled_circle(c.x + c.w / 2, c.y + c.h / 3, r, cc);
-      disp.filled_circle(c.x + c.w / 2, c.y + 2 * c.h / 3, r, cc);
-    } else if (c.val >= 0 || c.val == -2) {  // digit / dash  (-1 blank => nothing)
-      int rects[7][4];
-      bool act[7];
-      this->seg_rects_(c.val, c.x, c.y, c.w, c.h, rects, act);
-      for (int sg = 0; sg < 7; sg++)
-        capsule_disp_(disp, rects[sg][0], rects[sg][1], rects[sg][2], rects[sg][3],
-                      act[sg] ? color : off);
-    }
-  }
-}
-
 int DisplayClock::min_width() const {
   switch (this->style_) {
     case STYLE_ANALOG:
       return 24;
     case STYLE_DIGITAL:
-      return 24;  // really font-dependent
+    case STYLE_FLIPCLOCK:
+      return 24;  // really font/digit-size dependent
     case STYLE_CLOCKCLOCK24:
     default:
       return (int) std::ceil(16.0f * (8.0f + this->spacing_));
@@ -562,6 +374,7 @@ int DisplayClock::min_height() const {
     case STYLE_ANALOG:
       return 24;
     case STYLE_DIGITAL:
+    case STYLE_FLIPCLOCK:
       return 12;
     case STYLE_CLOCKCLOCK24:
     default:
@@ -570,61 +383,178 @@ int DisplayClock::min_height() const {
 }
 
 void DisplayClock::dump_config() {
-  static const char *const STYLES[] = {"clockclock24", "analog", "digital"};
+  static const char *const STYLES[] = {"clockclock24", "analog", "digital", "flipclock"};
   static const char *const MOVES[] = {"opposite", "clockwise", "counter", "long"};
   ESP_LOGCONFIG(TAG, "DisplayClock:");
   ESP_LOGCONFIG(TAG, "  Style: %s", STYLES[this->style_]);
+  bool is_clockclock24 = this->style_ == STYLE_CLOCKCLOCK24;
   ESP_LOGCONFIG(TAG, "  24-hour: %s", YESNO(this->h24_));
-  ESP_LOGCONFIG(TAG, "  Area: x=%d y=%d w=%d h=%d (0 = auto)", this->cfg_x_, this->cfg_y_,
-                this->cfg_w_, this->cfg_h_);
-  if (this->style_ == STYLE_CLOCKCLOCK24) {
-    ESP_LOGCONFIG(TAG, "  Transition: %u ms, movement: %s", this->transition_ms_,
+  if (this->show_seconds_ && is_clockclock24) {
+    ESP_LOGCONFIG(TAG, "  Seconds: ignored (clockclock24 has no seconds display)");
+  } else {
+    ESP_LOGCONFIG(TAG, "  Seconds: %s", YESNO(this->show_seconds_));
+  }
+  if (is_clockclock24) {
+    ESP_LOGCONFIG(TAG, "  Transition: %u ms, movement: %s", (unsigned) this->transition_ms_,
                   MOVES[this->movement_]);
   }
   ESP_LOGCONFIG(TAG, "  Recommended min: %dx%d px", this->min_width(), this->min_height());
 }
 
 // ---------------------------------------------------------------------------
-// LVGL canvas backend (LVGL 9)
+// LVGL canvas rendering (LVGL 9) - `this->obj` is the lv_canvas_t we own
 // ---------------------------------------------------------------------------
-#ifdef USE_LVGL
-void DisplayClock::draw_to_canvas(lv_obj_t *canvas) {
-  if (canvas == nullptr)
+void DisplayClock::render_() {
+  if (this->obj == nullptr)
     return;
-  int w = lv_obj_get_width(canvas);
-  int h = lv_obj_get_height(canvas);
+  int w = this->canvas_w_;
+  int h = this->canvas_h_;
   if (w <= 0 || h <= 0)
+    return;
+  if (!this->size_checked_) {
+    this->size_checked_ = true;
+    lv_draw_buf_t *buf = lv_canvas_get_draw_buf(this->obj);
+    if (buf == nullptr || buf->data == nullptr) {
+      ESP_LOGE(TAG,
+               "Canvas draw buffer (%dx%d, ~%u bytes) failed to allocate - not enough free RAM. "
+               "Reduce width/height, lower lvgl's buffer_size, or add PSRAM. Disabling rendering.",
+               w, h, (unsigned) (w * h * 2));
+      this->render_ok_ = false;
+    }
+    int mw = this->min_width(), mh = this->min_height();
+    if (w < mw || h < mh)
+      ESP_LOGW(TAG, "Draw area %dx%d px is below the recommended minimum %dx%d", w, h, mw, mh);
+    else
+      ESP_LOGI(TAG, "Draw area %dx%d px (min %dx%d) - OK", w, h, mw, mh);
+  }
+  if (!this->render_ok_)
     return;
   switch (this->style_) {
     case STYLE_ANALOG:
-      this->canvas_analog_(canvas, w, h);
+      this->canvas_analog_(w, h);
       break;
     case STYLE_DIGITAL:
-      this->canvas_digital_(canvas, w, h);
+      this->canvas_digital_(w, h);
+      break;
+    case STYLE_FLIPCLOCK:
+      this->canvas_flipclock_(w, h);
       break;
     case STYLE_CLOCKCLOCK24:
     default:
-      this->canvas_clockclock_(canvas, w, h);
+      this->canvas_clockclock_(w, h);
       break;
   }
-  lv_obj_invalidate(canvas);
+  lv_obj_invalidate(this->obj);
 }
 
 void DisplayClock::canvas_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
-                                int len, float angle_deg) {
+                                int len, float angle_deg, int start_len) {
   float rad = angle_deg * PI_F / 180.0f;
+  int sx = cx + (int) lroundf(sinf(rad) * start_len);
+  int sy = cy - (int) lroundf(cosf(rad) * start_len);
   int ex = cx + (int) lroundf(sinf(rad) * len);
   int ey = cy - (int) lroundf(cosf(rad) * len);
-  dsc->p1.x = (lv_value_precise_t) cx;
-  dsc->p1.y = (lv_value_precise_t) cy;
+  dsc->p1.x = (lv_value_precise_t) sx;
+  dsc->p1.y = (lv_value_precise_t) sy;
   dsc->p2.x = (lv_value_precise_t) ex;
   dsc->p2.y = (lv_value_precise_t) ey;
   lv_draw_line(layer, dsc);
 }
 
-void DisplayClock::canvas_clockclock_(lv_obj_t *canvas, int w, int h) {
+void DisplayClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
+                                       int R, float angle_deg, HandStyle style, Color color,
+                                       int baton_width, float len_frac, float tail_frac) {
+  int len = (int) (R * len_frac);
+  dsc->color = lv_color_make(color.r, color.g, color.b);
+  if (style == HAND_STYLE_BATON) {
+    // circle -> line -> rounded rectangle: a thin stalk from the centre out
+    // to where the thick baton begins, matching the reference (the baton
+    // doesn't start flush at the pivot).
+    int hub_r = std::max(2, R / 20);
+    int stalk_len = hub_r * 3;
+    dsc->width = std::max(1, R / 35);
+    this->canvas_hand_(layer, dsc, cx, cy, stalk_len, angle_deg);
+    dsc->width = baton_width;
+    this->canvas_hand_(layer, dsc, cx, cy, len, angle_deg, stalk_len);
+    if (tail_frac > 0.0f)
+      this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
+    return;
+  }
+  if (style == HAND_STYLE_SBB) {
+    this->canvas_sbb_hand_(layer, cx, cy, len, angle_deg, color, baton_width);
+    if (tail_frac > 0.0f)
+      this->canvas_sbb_hand_(layer, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f, color,
+                             baton_width);
+    return;
+  }
+  if (style == HAND_STYLE_LOLLIPOP) {
+    // Mondaine/SBB second hand: thin line ending inside the ball (the ball
+    // is the terminus, not a mid-shaft decoration the line pokes past).
+    int ball_r = std::max(2, R / 11);
+    int ball_dist = (int) (len * 0.65f);
+    dsc->width = std::max(1, R / 50);
+    this->canvas_hand_(layer, dsc, cx, cy, ball_dist, angle_deg);
+    if (tail_frac > 0.0f)
+      this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
+    lv_draw_rect_dsc_t dot;
+    lv_draw_rect_dsc_init(&dot);
+    dot.radius = LV_RADIUS_CIRCLE;
+    dot.bg_color = dsc->color;
+    dot.bg_opa = LV_OPA_COVER;  // solid fill, not just an outline
+    float ar = angle_deg * PI_F / 180.0f;
+    int ppx = cx + (int) lroundf(sinf(ar) * ball_dist);
+    int ppy = cy - (int) lroundf(cosf(ar) * ball_dist);
+    lv_area_t da = {ppx - ball_r, ppy - ball_r, ppx + ball_r, ppy + ball_r};
+    lv_draw_rect(layer, &dot, &da);
+    return;
+  }
+  dsc->width = std::max(1, R / 50);
+  this->canvas_hand_(layer, dsc, cx, cy, len, angle_deg);
+  if (tail_frac > 0.0f)
+    this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
+}
+
+void DisplayClock::canvas_sbb_hand_(lv_layer_t *layer, int cx, int cy, int len, float angle_deg,
+                                    Color color, int base_width) {
+  // A plain rectangle, flat-cut ends (no rounding, no taper, no point) - a
+  // single thick line with square caps, not 2 triangles (which showed a
+  // visible seam artifact along their shared diagonal edge).
+  lv_draw_line_dsc_t dsc;
+  lv_draw_line_dsc_init(&dsc);
+  dsc.color = lv_color_make(color.r, color.g, color.b);
+  dsc.width = (int) lroundf(base_width * 1.2f);
+  dsc.round_start = dsc.round_end = false;
+  this->canvas_hand_(layer, &dsc, cx, cy, len, angle_deg);
+}
+
+void DisplayClock::canvas_center_(lv_layer_t *layer, int cx, int cy, int r, CenterStyle style,
+                                  Color color) {
+  if (style == CENTER_STYLE_NONE)
+    return;
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.radius = LV_RADIUS_CIRCLE;
+  d.bg_opa = LV_OPA_COVER;
+  if (style == CENTER_STYLE_ROUND) {
+    d.bg_color = lv_color_make(color.r, color.g, color.b);
+    lv_area_t a = {cx - r, cy - r, cx + r, cy + r};
+    lv_draw_rect(layer, &d, &a);
+    return;
+  }
+  // CENTER_STYLE_CIRCLE: a ring in `color` around a black centre - draw the
+  // coloured circle first, then a smaller black one on top.
+  d.bg_color = lv_color_make(color.r, color.g, color.b);
+  lv_area_t a = {cx - r, cy - r, cx + r, cy + r};
+  lv_draw_rect(layer, &d, &a);
+  int r2 = std::max(1, r - std::max(2, r / 2));
+  d.bg_color = lv_color_make(0, 0, 0);
+  lv_area_t a2 = {cx - r2, cy - r2, cx + r2, cy + r2};
+  lv_draw_rect(layer, &d, &a2);
+}
+
+void DisplayClock::canvas_clockclock_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(canvas, to_lv(this->background_), LV_OPA_COVER);
+  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
   float cols = 8.0f + this->spacing_;
   float rows = 3.0f;
   // Odd diameter -> true centre pixel per clock (even => hands jump when spinning).
@@ -639,7 +569,7 @@ void DisplayClock::canvas_clockclock_(lv_obj_t *canvas, int w, int h) {
   int ox = (int) lroundf((w - grid_w) / 2.0f), oy = (int) lroundf((h - grid_h) / 2.0f);
 
   lv_layer_t layer;
-  lv_canvas_init_layer(canvas, &layer);
+  lv_canvas_init_layer(this->obj, &layer);
   lv_draw_line_dsc_t hand;
   lv_draw_line_dsc_init(&hand);
   hand.color = to_lv(this->pointer_color_());
@@ -675,23 +605,45 @@ void DisplayClock::canvas_clockclock_(lv_obj_t *canvas, int w, int h) {
     if (delta > 0.5f && delta < 359.5f)
       this->canvas_hand_(&layer, &hand, ccx, ccy, len, a1);
   }
-  lv_canvas_finish_layer(canvas, &layer);
+  lv_canvas_finish_layer(this->obj, &layer);
 }
 
-void DisplayClock::canvas_analog_(lv_obj_t *canvas, int w, int h) {
+int DisplayClock::tick_width_(int R, TickSize s) {
+  switch (s) {
+    case TICK_SIZE_SMALL:
+      return std::max(1, R / 60);  // old minute-tick default
+    case TICK_SIZE_LARGE:
+      return std::max(2, R / 18);  // old hour-tick default
+    case TICK_SIZE_MEDIUM:
+    default:
+      return std::max(1, R / 28);  // midpoint
+  }
+}
+
+float DisplayClock::tick_inner_(TickSize s) {
+  switch (s) {
+    case TICK_SIZE_SMALL:
+      return 0.89f;  // old minute-tick default
+    case TICK_SIZE_LARGE:
+      return 0.74f;  // old hour-tick default
+    case TICK_SIZE_MEDIUM:
+    default:
+      return 0.815f;  // midpoint
+  }
+}
+
+void DisplayClock::canvas_analog_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(canvas, to_lv(this->background_), LV_OPA_COVER);
+  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
   int cx = w / 2, cy = h / 2;
   int R = std::min(w, h) / 2 - 1;
   if (R < 6)
     return;
 
   lv_layer_t layer;
-  lv_canvas_init_layer(canvas, &layer);
+  lv_canvas_init_layer(this->obj, &layer);
   lv_draw_line_dsc_t ln;
   lv_draw_line_dsc_init(&ln);
-  ln.color = to_lv(this->face_border_color_());
-  ln.round_start = ln.round_end = true;
 
   // Filled dial - without it, black ticks are invisible on the black canvas.
   if (this->show_face_) {
@@ -706,83 +658,172 @@ void DisplayClock::canvas_analog_(lv_obj_t *canvas, int w, int h) {
     lv_area_t area = {cx - R, cy - R, cx + R, cy + R};
     lv_draw_rect(&layer, &face, &area);
   }
-  if (this->analog_ticks_) {
-    for (int i = 0; i < 60; i++) {
-      bool hour = (i % 5 == 0);
-      float a = i * 6.0f * PI_F / 180.0f;
-      float inner = hour ? 0.74f : 0.89f;
-      ln.width = hour ? std::max(2, R / 18) : std::max(1, R / 60);
-      ln.p1.x = (lv_value_precise_t) (cx + sinf(a) * R * inner);
-      ln.p1.y = (lv_value_precise_t) (cy - cosf(a) * R * inner);
-      ln.p2.x = (lv_value_precise_t) (cx + sinf(a) * R * 0.96f);
-      ln.p2.y = (lv_value_precise_t) (cy - cosf(a) * R * 0.96f);
-      lv_draw_line(&layer, &ln);
-    }
+  for (int i = 0; i < 60; i++) {
+    bool hour_pos = (i % 5 == 0);
+    // If hour ticks are off, minute ticks (when on) fill in at the hour
+    // positions too, so you get a full ring instead of 12 gaps.
+    bool hour = hour_pos && this->hour_ticks_;
+    if (!hour && !this->minute_ticks_)
+      continue;
+    float a = i * 6.0f * PI_F / 180.0f;
+    float inner = hour ? this->tick_inner_(this->hour_ticks_length_)
+                       : this->tick_inner_(this->minute_ticks_length_);
+    ln.width = hour ? this->tick_width_(R, this->hour_ticks_width_)
+                    : this->tick_width_(R, this->minute_ticks_width_);
+    ln.color = to_lv(hour ? this->hour_tick_color_() : this->minute_tick_color_());
+    ln.round_start = ln.round_end = hour ? this->hour_ticks_rounded_ : this->minute_ticks_rounded_;
+    ln.p1.x = (lv_value_precise_t) (cx + sinf(a) * R * inner);
+    ln.p1.y = (lv_value_precise_t) (cy - cosf(a) * R * inner);
+    ln.p2.x = (lv_value_precise_t) (cx + sinf(a) * R * 0.96f);
+    ln.p2.y = (lv_value_precise_t) (cy - cosf(a) * R * 0.96f);
+    lv_draw_line(&layer, &ln);
   }
   int hh, mm, ss;
-  if (this->now_hms_(hh, mm, ss)) {
+  this->now_or_fake_hms_(hh, mm, ss);
+  {
     lv_draw_line_dsc_t hand;
     lv_draw_line_dsc_init(&hand);
-    hand.color = to_lv(this->pointer_color_());
     hand.round_start = hand.round_end = true;
     float cs = ss + this->sub_second_(ss);
     float cm = mm + cs / 60.0f;
     float ch = (hh % 12) + cm / 60.0f;
-    hand.width = std::max(this->hand_width_ + 2, R / 12);
-    this->canvas_hand_(&layer, &hand, cx, cy, (int) (R * 0.55f), ch * 30.0f);
-    hand.width = std::max(this->hand_width_ + 1, R / 16);
-    this->canvas_hand_(&layer, &hand, cx, cy, (int) (R * 0.82f), cm * 6.0f);
-    if (this->analog_seconds_) {
-      float sec_a = cs * 6.0f;
-      lv_color_t sc = to_lv(this->second_color_());
-      hand.color = sc;
-      hand.width = std::max(1, R / 50);
-      this->canvas_hand_(&layer, &hand, cx, cy, (int) (R * 0.90f), sec_a);
-      lv_draw_rect_dsc_t dot;
-      lv_draw_rect_dsc_init(&dot);
-      dot.radius = LV_RADIUS_CIRCLE;
-      dot.bg_color = sc;
-      dot.bg_opa = LV_OPA_COVER;
-      int pr = std::max(2, R / 11);
-      float ar = sec_a * PI_F / 180.0f;
-      int ppx = cx + (int) lroundf(sinf(ar) * R * 0.62f);
-      int ppy = cy - (int) lroundf(cosf(ar) * R * 0.62f);
-      lv_area_t da = {ppx - pr, ppy - pr, ppx + pr, ppy + pr};
-      lv_draw_rect(&layer, &dot, &da);
+    // Each hand renders fully (line/shape, then its own centre marker) before
+    // the next one starts, like a real watch: hour, then minute on top of
+    // it, then second on top of both - so the second hand and its marker
+    // stay visible even where they cross the hour/minute hub rings.
+    this->canvas_analog_hand_(&layer, &hand, cx, cy, R, ch * 30.0f, this->hour_hand_style_,
+                              this->hour_hand_color_(), std::max(2, R / 12), 0.55f,
+                              this->hour_extend_);
+    this->canvas_center_(&layer, cx, cy, std::max(2, R / 14), this->hour_center_style_,
+                        this->hour_hand_color_());
+    this->canvas_analog_hand_(&layer, &hand, cx, cy, R, cm * 6.0f, this->minute_hand_style_,
+                              this->minute_hand_color_(), std::max(2, R / 16), 0.82f,
+                              this->minute_extend_);
+    this->canvas_center_(&layer, cx, cy, std::max(2, R / 18), this->minute_center_style_,
+                        this->minute_hand_color_());
+    if (this->show_seconds_) {
+      this->canvas_analog_hand_(&layer, &hand, cx, cy, R, cs * 6.0f, this->second_hand_style_,
+                                this->second_color_(), std::max(1, R / 20), 0.90f,
+                                this->second_extend_);
+      this->canvas_center_(&layer, cx, cy, std::max(1, R / 24), this->second_center_style_,
+                          this->second_color_());
     }
-    lv_draw_rect_dsc_t hubd;
-    lv_draw_rect_dsc_init(&hubd);
-    hubd.radius = LV_RADIUS_CIRCLE;
-    hubd.bg_color = to_lv(this->pointer_color_());
-    hubd.bg_opa = LV_OPA_COVER;
-    int hr = std::max(2, R / 14);
-    lv_area_t ha = {cx - hr, cy - hr, cx + hr, cy + hr};
-    lv_draw_rect(&layer, &hubd, &ha);
   }
-  lv_canvas_finish_layer(canvas, &layer);
+  lv_canvas_finish_layer(this->obj, &layer);
 }
 
-static void capsule_canvas_(lv_layer_t *layer, lv_draw_rect_dsc_t *rd, int x, int y, int w, int h,
-                            lv_color_t col) {
-  rd->bg_color = col;
-  rd->radius = std::min(w, h) / 2;  // rounded ends
+void DisplayClock::canvas_draw_segment_(lv_layer_t *layer, int x, int y, int w, int h, bool horiz,
+                                        lv_color_t color) {
+  if (this->segment_style_ == SEGMENT_STYLE_ROUNDED) {
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color = color;
+    rd.bg_opa = LV_OPA_COVER;
+    rd.radius = std::min(w, h) / 2;  // rounded ends
+    lv_area_t a = {x, y, x + w - 1, y + h - 1};
+    lv_draw_rect(layer, &rd, &a);
+    return;
+  }
+  // classic: a square core rect plus a tapered triangular point at each end
+  // (along the segment's length), meeting the neighbouring segment's own
+  // point exactly at the shared corner - since the layout in seg_rects_
+  // already insets horizontal segments by the segment thickness `t`, and a
+  // taper of half that thickness from each of the two meeting segments adds
+  // up to exactly that gap.
+  lv_draw_rect_dsc_t rd;
+  lv_draw_rect_dsc_init(&rd);
+  rd.bg_color = color;
+  rd.bg_opa = LV_OPA_COVER;
+  rd.radius = 0;
   lv_area_t a = {x, y, x + w - 1, y + h - 1};
-  lv_draw_rect(layer, rd, &a);
+  lv_draw_rect(layer, &rd, &a);
+
+  lv_draw_triangle_dsc_t td;
+  lv_draw_triangle_dsc_init(&td);
+  td.color = color;
+  td.opa = LV_OPA_COVER;
+  if (horiz) {
+    float taper = h / 2.0f;
+    td.p[0].x = (lv_value_precise_t) x;
+    td.p[0].y = (lv_value_precise_t) y;
+    td.p[1].x = (lv_value_precise_t) x;
+    td.p[1].y = (lv_value_precise_t) (y + h);
+    td.p[2].x = (lv_value_precise_t) (x - taper);
+    td.p[2].y = (lv_value_precise_t) (y + h / 2.0f);
+    lv_draw_triangle(layer, &td);
+    td.p[0].x = (lv_value_precise_t) (x + w);
+    td.p[0].y = (lv_value_precise_t) y;
+    td.p[1].x = (lv_value_precise_t) (x + w);
+    td.p[1].y = (lv_value_precise_t) (y + h);
+    td.p[2].x = (lv_value_precise_t) (x + w + taper);
+    td.p[2].y = (lv_value_precise_t) (y + h / 2.0f);
+    lv_draw_triangle(layer, &td);
+  } else {
+    float taper = w / 2.0f;
+    td.p[0].x = (lv_value_precise_t) x;
+    td.p[0].y = (lv_value_precise_t) y;
+    td.p[1].x = (lv_value_precise_t) (x + w);
+    td.p[1].y = (lv_value_precise_t) y;
+    td.p[2].x = (lv_value_precise_t) (x + w / 2.0f);
+    td.p[2].y = (lv_value_precise_t) (y - taper);
+    lv_draw_triangle(layer, &td);
+    td.p[0].x = (lv_value_precise_t) x;
+    td.p[0].y = (lv_value_precise_t) (y + h);
+    td.p[1].x = (lv_value_precise_t) (x + w);
+    td.p[1].y = (lv_value_precise_t) (y + h);
+    td.p[2].x = (lv_value_precise_t) (x + w / 2.0f);
+    td.p[2].y = (lv_value_precise_t) (y + h + taper);
+    lv_draw_triangle(layer, &td);
+  }
 }
 
-void DisplayClock::canvas_digital_(lv_obj_t *canvas, int w, int h) {
+// Tiny vector "font" for the AM/PM markers - the 7-segment style is
+// deliberately font-free, so the letters are drawn as line strokes and
+// auto-scale with the widget like everything else. Only A/M/P exist.
+void DisplayClock::canvas_stroke_text_(lv_layer_t *layer, const char *txt, float x, float y,
+                                       float lw, float lh, lv_color_t color) {
+  struct Stroke {
+    char ch;
+    float x1, y1, x2, y2;  // in a unit box, y down
+  };
+  static const Stroke STROKES[] = {
+      {'A', 0.0f, 1.0f, 0.5f, 0.0f},   {'A', 0.5f, 0.0f, 1.0f, 1.0f},
+      {'A', 0.2f, 0.62f, 0.8f, 0.62f},
+      {'M', 0.0f, 1.0f, 0.0f, 0.0f},   {'M', 0.0f, 0.0f, 0.5f, 0.5f},
+      {'M', 0.5f, 0.5f, 1.0f, 0.0f},   {'M', 1.0f, 0.0f, 1.0f, 1.0f},
+      {'P', 0.0f, 1.0f, 0.0f, 0.0f},   {'P', 0.0f, 0.0f, 0.8f, 0.0f},
+      {'P', 0.8f, 0.0f, 0.8f, 0.52f},  {'P', 0.8f, 0.52f, 0.0f, 0.52f},
+  };
+  lv_draw_line_dsc_t ln;
+  lv_draw_line_dsc_init(&ln);
+  ln.color = color;
+  ln.width = std::max(1, (int) (lh / 6.0f));
+  ln.round_start = ln.round_end = true;
+  float cx = x;
+  for (const char *p = txt; *p != '\0'; p++) {
+    for (const auto &s : STROKES) {
+      if (s.ch != *p)
+        continue;
+      ln.p1.x = (lv_value_precise_t) (cx + s.x1 * lw);
+      ln.p1.y = (lv_value_precise_t) (y + s.y1 * lh);
+      ln.p2.x = (lv_value_precise_t) (cx + s.x2 * lw);
+      ln.p2.y = (lv_value_precise_t) (y + s.y2 * lh);
+      lv_draw_line(layer, &ln);
+    }
+    cx += lw * 1.35f;
+  }
+}
+
+void DisplayClock::canvas_digital_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(canvas, to_lv(this->background_), LV_OPA_COVER);
-  DigitalCell cells[8];
-  int n = this->digital_cells_(0, 0, w, h, cells);
+  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  DigitalCell cells[MAX_CELLS];
+  int n = this->digital_cells_(w, h, cells);
   lv_color_t fg = to_lv(this->pointer_color_());
   lv_color_t off = to_lv(this->digital_off_color_());
 
   lv_layer_t layer;
-  lv_canvas_init_layer(canvas, &layer);
-  lv_draw_rect_dsc_t rd;
-  lv_draw_rect_dsc_init(&rd);
-  rd.bg_opa = LV_OPA_COVER;
+  lv_canvas_init_layer(this->obj, &layer);
   lv_draw_rect_dsc_t dot;
   lv_draw_rect_dsc_init(&dot);
   dot.radius = LV_RADIUS_CIRCLE;
@@ -800,16 +841,191 @@ void DisplayClock::canvas_digital_(lv_obj_t *canvas, int w, int h) {
     } else if (c.val >= 0 || c.val == -2) {
       int rects[7][4];
       bool act[7];
-      this->seg_rects_(c.val, c.x, c.y, c.w, c.h, rects, act);
+      bool horiz[7];
+      this->seg_rects_(c.val, c.x, c.y, c.w, c.h, rects, act, horiz);
       for (int sg = 0; sg < 7; sg++)
-        capsule_canvas_(&layer, &rd, rects[sg][0], rects[sg][1], rects[sg][2], rects[sg][3],
-                        act[sg] ? fg : off);
+        this->canvas_draw_segment_(&layer, rects[sg][0], rects[sg][1], rects[sg][2], rects[sg][3],
+                                   horiz[sg], act[sg] ? fg : off);
     }
   }
-  lv_canvas_finish_layer(canvas, &layer);
+  // 12h mode: AM over PM in the reserved left-hand column - the active one
+  // lit, the other as an off_color "ghost" like unlit segments.
+  if (this->ampm_w_ > 0) {
+    float lh = this->ampm_h_ * 0.26f;
+    float lw = std::min(lh * 0.85f, this->ampm_w_ / 2.5f);
+    float ax = this->ampm_x_;
+    this->canvas_stroke_text_(&layer, "AM", ax, (float) this->ampm_y_, lw, lh,
+                              this->pm_ ? off : fg);
+    this->canvas_stroke_text_(&layer, "PM", ax, this->ampm_y_ + this->ampm_h_ - lh, lw, lh,
+                              this->pm_ ? fg : off);
+  }
+  lv_canvas_finish_layer(this->obj, &layer);
 }
 
-#endif  // USE_LVGL
+// ---------------------------------------------------------------------------
+// flipclock - split-flap cards with font-rendered digits
+// ---------------------------------------------------------------------------
+void DisplayClock::flip_card_(lv_layer_t *layer, int x, int y, int w, int h, char ch, int clip_y1,
+                              int clip_y2, bool text_bottom) {
+  if (clip_y1 > clip_y2)
+    return;
+  // Restrict the layer's clip area to the requested band - LVGL documents
+  // _clip_area as settable before adding draw tasks, and the canvas layer is
+  // in canvas-local coordinates, so cell coords can be used directly.
+  lv_area_t saved = layer->_clip_area;
+  lv_area_t band = {x, std::max(clip_y1, (int) saved.y1), x + w - 1,
+                    std::min(clip_y2, (int) saved.y2)};
+  layer->_clip_area = band;
+
+  Color cc = this->flip_card_color_();
+  lv_draw_rect_dsc_t card;
+  lv_draw_rect_dsc_init(&card);
+  card.bg_color = lv_color_make(cc.r, cc.g, cc.b);
+  card.bg_opa = LV_OPA_COVER;
+  card.radius = std::max(2, std::min(w, h) / 10);
+  lv_area_t a = {x, y, x + w - 1, y + h - 1};
+  lv_draw_rect(layer, &card, &a);
+
+  // 'A'/'P' are the AM/PM card's two states - render the two-letter word in
+  // the smaller am_pm_font_ (falling back to the digit font); every other
+  // char is a single digit glyph in the main font.
+  bool is_ampm = (ch == 'A' || ch == 'P');
+  const lv_font_t *font = is_ampm ? (this->am_pm_font_ ? this->am_pm_font_ : this->flip_font_)
+                                  : this->flip_font_;
+  if (ch != ' ' && font != nullptr) {
+    char txt[3];
+    if (is_ampm) {
+      txt[0] = ch;
+      txt[1] = 'M';
+      txt[2] = 0;
+    } else {
+      txt[0] = ch;
+      txt[1] = 0;
+    }
+    lv_point_t sz;
+    lv_text_get_size(&sz, txt, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    Color fg = this->pointer_color_();
+    lv_draw_label_dsc_t ld;
+    lv_draw_label_dsc_init(&ld);
+    ld.color = lv_color_make(fg.r, fg.g, fg.b);
+    ld.font = font;
+    ld.text = txt;
+    ld.text_local = 1;  // txt is stack-local - LVGL must copy it into the draw task
+    int tx = x + (w - sz.x) / 2;
+    // text_bottom centres the text within the lower half of the card (used by
+    // the AM/PM card); otherwise centre it in the whole card (digit cards).
+    int ty = text_bottom ? (y + h / 2 + (h / 2 - sz.y) / 2) : (y + (h - sz.y) / 2);
+    lv_area_t ta = {tx, ty, tx + sz.x, ty + sz.y};
+    lv_draw_label(layer, &ld, &ta);
+  }
+  layer->_clip_area = saved;
+}
+
+void DisplayClock::canvas_flipclock_(int w, int h) {
+  auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
+  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  DigitalCell cells[MAX_CELLS];
+  int n = this->digital_cells_(w, h, cells);
+  uint32_t now = millis();
+
+  lv_layer_t layer;
+  lv_canvas_init_layer(this->obj, &layer);
+
+  lv_draw_rect_dsc_t dot;
+  lv_draw_rect_dsc_init(&dot);
+  dot.radius = LV_RADIUS_CIRCLE;
+  dot.bg_opa = LV_OPA_COVER;
+  dot.bg_color = to_lv(this->pointer_color_());
+
+  for (int i = 0; i < n; i++) {
+    DigitalCell &c = cells[i];
+    if (c.val == 10 || c.val == 11) {
+      // divider dots between groups - a blinked-off divider just disappears
+      // (flip clocks have no "ghost" state). Deliberately small - flip-clock
+      // dividers are subtle, unlike the chunky 7-segment colon.
+      if (c.val == 10) {
+        int r = std::max(1, c.w / 6), mx = c.x + c.w / 2;
+        int y1 = c.y + c.h / 3, y2 = c.y + 2 * c.h / 3;
+        lv_area_t a1 = {mx - r, y1 - r, mx + r, y1 + r};
+        lv_area_t a2 = {mx - r, y2 - r, mx + r, y2 + r};
+        lv_draw_rect(&layer, &dot, &a1);
+        lv_draw_rect(&layer, &dot, &a2);
+      }
+      continue;
+    }
+    if (c.val == 12) {  // dedicated AM/PM card (12h mode) - static, no flip
+      char ch = this->pm_ ? 'P' : 'A';
+      // draw the whole card once with the label sitting in the bottom half,
+      // horizontally centred (so the seam doesn't cut through it).
+      this->flip_card_(&layer, c.x, c.y, c.w, c.h, ch, c.y, c.y + c.h - 1, /*text_bottom=*/true);
+      lv_draw_rect_dsc_t seam_d;
+      lv_draw_rect_dsc_init(&seam_d);
+      seam_d.bg_color = to_lv(this->background_);
+      seam_d.bg_opa = LV_OPA_COVER;
+      int seam = c.y + c.h / 2, st = std::max(1, c.h / 40);
+      lv_area_t sa = {c.x, seam - (st + 1) / 2, c.x + c.w - 1, seam + st / 2};
+      lv_draw_rect(&layer, &seam_d, &sa);
+      continue;
+    }
+    char ch = (c.val >= 0) ? (char) ('0' + c.val) : (c.val == -2 ? '-' : ' ');
+    if (this->flip_shown_[i] == 0) {  // first render: adopt without animating
+      this->flip_shown_[i] = ch;
+      this->flip_prev_[i] = ch;
+      this->flip_start_[i] = now - this->flip_ms_;
+    } else if (this->flip_shown_[i] != ch) {
+      this->flip_prev_[i] = this->flip_shown_[i];
+      this->flip_shown_[i] = ch;
+      this->flip_start_[i] = now;
+    }
+    float t = 1.0f;
+    if (this->flip_ms_ > 0)
+      t = (now - this->flip_start_[i]) / (float) this->flip_ms_;
+    int seam = c.y + c.h / 2;
+    if (t >= 1.0f) {
+      this->flip_card_(&layer, c.x, c.y, c.w, c.h, ch, c.y, c.y + c.h - 1);
+    } else {
+      char prev = this->flip_prev_[i];
+      int half = c.h / 2;
+      float s = t * t;  // ease-in: the flap accelerates like a falling flap
+      if (s < 0.5f) {
+        // flap (blank card back) falling over the top half, hinged at the
+        // seam - the new digit is revealed above it, the old one still shows
+        // below the seam.
+        int flap_h = (int) lroundf(half * (1.0f - 2.0f * s));
+        this->flip_card_(&layer, c.x, c.y, c.w, c.h, prev, seam, c.y + c.h - 1);
+        this->flip_card_(&layer, c.x, c.y, c.w, c.h, ch, c.y, seam - flap_h - 1);
+        if (flap_h > 0) {
+          lv_draw_rect_dsc_t flap;
+          lv_draw_rect_dsc_init(&flap);
+          Color cc = this->flip_card_color_();
+          flap.bg_color = lv_color_darken(lv_color_make(cc.r, cc.g, cc.b), LV_OPA_30);
+          flap.bg_opa = LV_OPA_COVER;
+          flap.radius = std::max(2, std::min(c.w, c.h) / 10);
+          lv_area_t fa = {c.x, seam - flap_h, c.x + c.w - 1, seam - 1};
+          lv_draw_rect(&layer, &flap, &fa);
+        }
+      } else {
+        // flap landing on the bottom half, its face showing the new digit -
+        // the old digit is still visible below its leading edge.
+        int flap_h = (int) lroundf(half * (2.0f * s - 1.0f));
+        this->flip_card_(&layer, c.x, c.y, c.w, c.h, ch, c.y, seam - 1);
+        this->flip_card_(&layer, c.x, c.y, c.w, c.h, prev, seam + flap_h, c.y + c.h - 1);
+        if (flap_h > 0)
+          this->flip_card_(&layer, c.x, c.y, c.w, c.h, ch, seam, seam + flap_h - 1);
+      }
+    }
+    // the horizontal seam across the middle of every card
+    lv_draw_rect_dsc_t seam_d;
+    lv_draw_rect_dsc_init(&seam_d);
+    seam_d.bg_color = to_lv(this->background_);
+    seam_d.bg_opa = LV_OPA_COVER;
+    seam_d.radius = 0;
+    int st = std::max(1, c.h / 40);
+    lv_area_t sa = {c.x, seam - (st + 1) / 2, c.x + c.w - 1, seam + st / 2};
+    lv_draw_rect(&layer, &seam_d, &sa);
+  }
+  lv_canvas_finish_layer(this->obj, &layer);
+}
 
 }  // namespace display_clock
 }  // namespace esphome
