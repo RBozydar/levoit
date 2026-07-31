@@ -1,8 +1,8 @@
-# display_clock - style: digital, self-contained 7-segment display.
-# Compile:  esphome compile components/display_clock/example_digital.yaml
+# lvgl_clock - style: digital, self-contained 7-segment display.
+# Compile:  esphome compile components/lvgl_clock/example_digital.yaml
 
 esphome:
-  name: display-clock-digital
+  name: lvgl-clock-digital
 
 packages:
   base: !include common_base.yaml
@@ -11,11 +11,11 @@ packages:
 
 lvgl:
   widgets:
-    - display_clock:
+    - lvgl_clock:
         id: dc
         time_id: sntp_time
-        width: 240
-        height: 120
+        width: 480
+        height: 320
         align: CENTER
         style: digital
         foreground: cc_hands

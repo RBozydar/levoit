@@ -7,14 +7,14 @@
 #include "esphome/components/lvgl/lvgl_esphome.h"
 
 namespace esphome {
-namespace display_clock {
+namespace lvgl_clock {
 
 // A clock rendered onto an LVGL 9 canvas. Pick a `style`:
 //   - clockclock24 : a digital clock made of 24 tiny analogue clocks
 //   - analog       : one classic analogue clock face
 //   - digital      : HH:MM(:SS) as a rounded 7-segment display
 //   - flipclock    : HH:MM(:SS) as split-flap cards with font-rendered digits
-// It's a native `lvgl:` widget: add it under `lvgl: widgets: - display_clock: ...`,
+// It's a native `lvgl:` widget: add it under `lvgl: widgets: - lvgl_clock: ...`,
 // like `canvas` or `line`. It owns its canvas and redraws itself from loop().
 
 enum ClockStyle {
@@ -22,14 +22,18 @@ enum ClockStyle {
   STYLE_ANALOG,
   STYLE_DIGITAL,
   STYLE_FLIPCLOCK,
+  // Big HH:MM digits drawn on a grid of small 7-segment displays - each small
+  // display's segments act as "pixels" of the large numerals.
+  STYLE_SEG_MATRIX,
 };
 
 // analog-only: how a single hand is drawn.
 enum HandStyle {
   HAND_STYLE_BATON = 0,    // thick rounded bar (default hour/minute look)
-  HAND_STYLE_LINE,         // thin plain line, no cap
+  HAND_STYLE_LINE,         // thin plain line, flat/square ends
   HAND_STYLE_LOLLIPOP,     // thin line + a round "blob" partway along it
   HAND_STYLE_SBB,          // tapered needle: wide at the pivot, a sharp point at the tip
+  HAND_STYLE_LINE_ROUNDED, // thin plain line, rounded ends
 };
 
 // analog-only: how a hand's own centre marker is drawn (each hand draws its
@@ -89,7 +93,7 @@ struct DigitalCell {
 // max cells one layout can produce: AM/PM card + HH + : + MM + : + SS
 static const int MAX_CELLS = 10;
 
-class DisplayClock : public Component, public lvgl::LvCompound {
+class LvglClock : public Component, public lvgl::LvCompound {
  public:
   // --- shared ---
   void set_time(time::RealTimeClock *t) { this->time_ = t; }
@@ -98,6 +102,11 @@ class DisplayClock : public Component, public lvgl::LvCompound {
   void set_show_face(bool show) { this->show_face_ = show; }
   void set_foreground(Color c) { this->fg_ = c; }
   void set_background(Color c) { this->background_ = c; }
+  // Transparent background: clears the canvas to fully transparent each frame
+  // instead of filling `background`, so widgets layered behind the clock show
+  // through the gaps between hands/ticks/digits. Needs the canvas allocated
+  // in an alpha format (ARGB8888) - the Python side does that when this is set.
+  void set_transparent(bool t) { this->transparent_ = t; }
   void set_pointer_color(Color c) {
     this->pointer_ = c;
     this->has_pointer_ = true;
@@ -272,10 +281,17 @@ class DisplayClock : public Component, public lvgl::LvCompound {
 
   // rendering: draws the current state onto `this->obj` (owned lv_canvas_t)
   void render_();
+  // Clears the canvas at the start of each frame: to `background_` normally,
+  // or to fully transparent when transparent_ (needs an ARGB8888 canvas).
+  void fill_bg_();
   void canvas_clockclock_(int w, int h);
   void canvas_analog_(int w, int h);
   void canvas_digital_(int w, int h);
   void canvas_flipclock_(int w, int h);
+  // Big HH:MM digits sampled onto a seg_cols_ x seg_rows_ grid of small
+  // 7-segment displays: each small segment lights when it falls under a lit
+  // stroke of the large 7-segment numerals.
+  void canvas_seg_matrix_(int w, int h);
   // One flip card (rounded rect + centred font glyph), drawn only inside the
   // vertical band [clip_y1, clip_y2] - the flip animation renders the same
   // card up to three times per frame with different bands/characters.
@@ -328,7 +344,8 @@ class DisplayClock : public Component, public lvgl::LvCompound {
   // buffer pointer, which otherwise hard-crashes (StoreProhibited).
   bool render_ok_{true};
   bool show_seconds_{false};
-  uint32_t render_interval_ms_{33};
+  bool transparent_{false};
+  uint32_t render_interval_ms_{16};
   uint32_t last_render_ms_{0};
   int canvas_w_{0};
   int canvas_h_{0};
@@ -336,7 +353,7 @@ class DisplayClock : public Component, public lvgl::LvCompound {
   // clockclock24
   int hand_width_{1};
   uint32_t transition_ms_{2000};
-  float spacing_{0.6f};
+  float spacing_{0.0f};
   MovementMode movement_{CC_MOVE_OPPOSITE};
   float mode_speed_{1.0f};
   ClockMode mode_{CC_MODE_TIME};
@@ -401,17 +418,17 @@ class DisplayClock : public Component, public lvgl::LvCompound {
   uint32_t flip_start_[MAX_CELLS]{};
 };
 
-// Action for clockclock24 idle animations: display_clock.show_time / .rotate_left
+// Action for clockclock24 idle animations: lvgl_clock.show_time / .rotate_left
 // / .flying_birds.
 template<typename... Ts> class SetModeAction : public Action<Ts...> {
  public:
-  SetModeAction(DisplayClock *parent, ClockMode mode) : parent_(parent), mode_(mode) {}
+  SetModeAction(LvglClock *parent, ClockMode mode) : parent_(parent), mode_(mode) {}
   void play(Ts... x) override { this->parent_->set_mode(this->mode_); }
 
  protected:
-  DisplayClock *parent_;
+  LvglClock *parent_;
   ClockMode mode_;
 };
 
-}  // namespace display_clock
+}  // namespace lvgl_clock
 }  // namespace esphome

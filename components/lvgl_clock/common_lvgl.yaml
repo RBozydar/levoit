@@ -1,4 +1,4 @@
-# Shared LVGL setup + colour palette for the display_clock example_*.yaml
+# Shared LVGL setup + colour palette for the lvgl_clock example_*.yaml
 # configs. `packages:` merges dicts key-by-key, so this file's `lvgl:` keys
 # (displays, rotation, bg_color) and each example's own `lvgl: widgets:` key
 # combine into one `lvgl:` block - no list-merge semantics needed since only
@@ -21,5 +21,5 @@ color:
 lvgl:
   displays: [my_display]
   rotation: 90
-  buffer_size: 25%
+#  buffer_size: 25%
   bg_color: 0x000000

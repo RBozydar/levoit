@@ -1,4 +1,4 @@
-#include "display_clock.h"
+#include "lvgl_clock.h"
 #include "esphome/core/log.h"
 #include <cmath>
 #include <cstdio>
@@ -7,9 +7,9 @@
 #include <algorithm>
 
 namespace esphome {
-namespace display_clock {
+namespace lvgl_clock {
 
-static const char *const TAG = "display_clock";
+static const char *const TAG = "lvgl_clock";
 
 static const float PI_F = 3.14159265358979323846f;
 static const float PARK = 225.0f;  // clockclock idle: both hands to bottom-left
@@ -31,7 +31,7 @@ static const float FONT[10][CLOCKS_PER_DIGIT][2] = {
 
 static inline float ease(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
 
-void DisplayClock::setup() {
+void LvglClock::setup() {
   for (int i = 0; i < NUM_HANDS; i++) {
     this->cur_[i] = PARK;
     this->start_[i] = PARK;
@@ -41,7 +41,7 @@ void DisplayClock::setup() {
   this->last_key_ = -1;
 }
 
-bool DisplayClock::now_hms_(int &hh, int &mm, int &ss) {
+bool LvglClock::now_hms_(int &hh, int &mm, int &ss) {
   if (this->time_ == nullptr)
     return false;
   ESPTime t = this->time_->now();
@@ -59,7 +59,7 @@ bool DisplayClock::now_hms_(int &hh, int &mm, int &ss) {
   return true;
 }
 
-void DisplayClock::now_or_fake_hms_(int &hh, int &mm, int &ss) {
+void LvglClock::now_or_fake_hms_(int &hh, int &mm, int &ss) {
   if (this->now_hms_(hh, mm, ss))
     return;
   // No valid time yet - show 00:15 (a nice pose: analog hands aren't stacked
@@ -74,7 +74,7 @@ void DisplayClock::now_or_fake_hms_(int &hh, int &mm, int &ss) {
 // ---------------------------------------------------------------------------
 // clockclock24 animation engine
 // ---------------------------------------------------------------------------
-void DisplayClock::set_time_(int hh, int mm) {
+void LvglClock::set_time_(int hh, int mm) {
   int lead = hh / 10;
   if (lead == 0 && !this->h24_)
     lead = -1;  // blank leading zero in 12h mode
@@ -84,7 +84,7 @@ void DisplayClock::set_time_(int hh, int mm) {
   this->digits_[3] = mm % 10;
 }
 
-void DisplayClock::retarget_() {
+void LvglClock::retarget_() {
   for (int d = 0; d < NUM_DIGITS; d++) {
     int val = this->digits_[d];
     bool blank = (val < 0 || val > 9);
@@ -128,7 +128,7 @@ void DisplayClock::retarget_() {
   this->animating_ = true;
 }
 
-void DisplayClock::advance_animation_() {
+void LvglClock::advance_animation_() {
   if (!this->animating_)
     return;
   // Read a fresh timestamp rather than accepting one from the caller: retarget_()
@@ -151,7 +151,7 @@ void DisplayClock::advance_animation_() {
   }
 }
 
-void DisplayClock::tick_time_(uint32_t now_ms) {
+void LvglClock::tick_time_(uint32_t now_ms) {
   int hh, mm, ss;
   if (this->now_hms_(hh, mm, ss)) {
     int key = hh * 100 + mm;
@@ -164,7 +164,7 @@ void DisplayClock::tick_time_(uint32_t now_ms) {
   this->advance_animation_();
 }
 
-void DisplayClock::tick_rotate_(uint32_t now_ms) {
+void LvglClock::tick_rotate_(uint32_t now_ms) {
   float ang = fmodf(now_ms / 1000.0f * 45.0f * this->mode_speed_, 360.0f);
   float a = 360.0f - ang;
   for (int c = 0; c < NUM_CLOCKS; c++) {
@@ -173,7 +173,7 @@ void DisplayClock::tick_rotate_(uint32_t now_ms) {
   }
 }
 
-void DisplayClock::tick_birds_(uint32_t now_ms) {
+void LvglClock::tick_birds_(uint32_t now_ms) {
   float ph = now_ms / 1000.0f * 2.0f * this->mode_speed_;
   float wing = 85.0f + 45.0f * sinf(ph);  // sweeps ~40..130 deg
   float left = 360.0f - wing;
@@ -183,7 +183,7 @@ void DisplayClock::tick_birds_(uint32_t now_ms) {
   }
 }
 
-void DisplayClock::tick_demo_(uint32_t now_ms) {
+void LvglClock::tick_demo_(uint32_t now_ms) {
   if (now_ms - this->demo_last_ms_ >= this->demo_interval_ms_) {
     this->demo_last_ms_ = now_ms;
     this->demo_min_ = (this->demo_min_ + 1) % (24 * 60);
@@ -204,7 +204,7 @@ void DisplayClock::tick_demo_(uint32_t now_ms) {
   this->advance_animation_();
 }
 
-void DisplayClock::set_mode(ClockMode m) {
+void LvglClock::set_mode(ClockMode m) {
   if (m == this->mode_)
     return;
   this->mode_ = m;
@@ -218,7 +218,7 @@ void DisplayClock::set_mode(ClockMode m) {
   }
 }
 
-void DisplayClock::loop() {
+void LvglClock::loop() {
   uint32_t now_ms = millis();
   if (this->style_ == STYLE_CLOCKCLOCK24) {
     switch (this->mode_) {
@@ -246,7 +246,7 @@ void DisplayClock::loop() {
 // ---------------------------------------------------------------------------
 // digital (seven-segment) layout
 // ---------------------------------------------------------------------------
-float DisplayClock::sub_second_(int ss) {
+float LvglClock::sub_second_(int ss) {
   uint32_t now = millis();
   if (ss != this->last_sec_) {
     this->last_sec_ = ss;
@@ -259,7 +259,7 @@ float DisplayClock::sub_second_(int ss) {
 // segment on/off bitmask per digit (a=1,b=2,c=4,d=8,e=16,f=32,g=64)
 static const uint8_t SEG7[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
-void DisplayClock::seg_rects_(int digit, int dx, int dy, int dw, int dh, int rects[7][4],
+void LvglClock::seg_rects_(int digit, int dx, int dy, int dw, int dh, int rects[7][4],
                               bool active[7], bool horiz[7]) {
   int t = std::max(2, dw / 6);
   int vh = (dh - 3 * t) / 2;
@@ -289,7 +289,7 @@ void DisplayClock::seg_rects_(int digit, int dx, int dy, int dw, int dh, int rec
   }
 }
 
-int DisplayClock::digital_cells_(int w, int h, DigitalCell out[MAX_CELLS]) {
+int LvglClock::digital_cells_(int w, int h, DigitalCell out[MAX_CELLS]) {
   int x = 1;
   w -= 2;  // small margin so the rounded ends never clip at the edges
   int hh, mm, ss;
@@ -357,35 +357,39 @@ int DisplayClock::digital_cells_(int w, int h, DigitalCell out[MAX_CELLS]) {
   return nv;
 }
 
-int DisplayClock::min_width() const {
+int LvglClock::min_width() const {
   switch (this->style_) {
     case STYLE_ANALOG:
       return 24;
     case STYLE_DIGITAL:
     case STYLE_FLIPCLOCK:
       return 24;  // really font/digit-size dependent
+    case STYLE_SEG_MATRIX:
+      return 24 * 6;  // fixed 24 columns, ~6px per small display
     case STYLE_CLOCKCLOCK24:
     default:
       return (int) std::ceil(16.0f * (8.0f + this->spacing_));
   }
 }
-int DisplayClock::min_height() const {
+int LvglClock::min_height() const {
   switch (this->style_) {
     case STYLE_ANALOG:
       return 24;
     case STYLE_DIGITAL:
     case STYLE_FLIPCLOCK:
       return 12;
+    case STYLE_SEG_MATRIX:
+      return 6 * 10;  // fixed 6 rows
     case STYLE_CLOCKCLOCK24:
     default:
       return 48;
   }
 }
 
-void DisplayClock::dump_config() {
-  static const char *const STYLES[] = {"clockclock24", "analog", "digital", "flipclock"};
+void LvglClock::dump_config() {
+  static const char *const STYLES[] = {"clockclock24", "analog", "digital", "flipclock", "seg_matrix"};
   static const char *const MOVES[] = {"opposite", "clockwise", "counter", "long"};
-  ESP_LOGCONFIG(TAG, "DisplayClock:");
+  ESP_LOGCONFIG(TAG, "LvglClock:");
   ESP_LOGCONFIG(TAG, "  Style: %s", STYLES[this->style_]);
   bool is_clockclock24 = this->style_ == STYLE_CLOCKCLOCK24;
   ESP_LOGCONFIG(TAG, "  24-hour: %s", YESNO(this->h24_));
@@ -404,7 +408,19 @@ void DisplayClock::dump_config() {
 // ---------------------------------------------------------------------------
 // LVGL canvas rendering (LVGL 9) - `this->obj` is the lv_canvas_t we own
 // ---------------------------------------------------------------------------
-void DisplayClock::render_() {
+void LvglClock::fill_bg_() {
+  if (this->transparent_) {
+    // Clear to fully transparent (needs the ARGB8888 canvas the Python side
+    // allocates when `transparent` is set) so widgets behind the clock show
+    // through the gaps.
+    lv_canvas_fill_bg(this->obj, lv_color_black(), LV_OPA_TRANSP);
+  } else {
+    lv_canvas_fill_bg(this->obj, lv_color_make(this->background_.r, this->background_.g, this->background_.b),
+                      LV_OPA_COVER);
+  }
+}
+
+void LvglClock::render_() {
   if (this->obj == nullptr)
     return;
   int w = this->canvas_w_;
@@ -418,7 +434,7 @@ void DisplayClock::render_() {
       ESP_LOGE(TAG,
                "Canvas draw buffer (%dx%d, ~%u bytes) failed to allocate - not enough free RAM. "
                "Reduce width/height, lower lvgl's buffer_size, or add PSRAM. Disabling rendering.",
-               w, h, (unsigned) (w * h * 2));
+               w, h, (unsigned) (w * h * (this->transparent_ ? 4 : 2)));
       this->render_ok_ = false;
     }
     int mw = this->min_width(), mh = this->min_height();
@@ -439,6 +455,9 @@ void DisplayClock::render_() {
     case STYLE_FLIPCLOCK:
       this->canvas_flipclock_(w, h);
       break;
+    case STYLE_SEG_MATRIX:
+      this->canvas_seg_matrix_(w, h);
+      break;
     case STYLE_CLOCKCLOCK24:
     default:
       this->canvas_clockclock_(w, h);
@@ -447,7 +466,7 @@ void DisplayClock::render_() {
   lv_obj_invalidate(this->obj);
 }
 
-void DisplayClock::canvas_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
+void LvglClock::canvas_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
                                 int len, float angle_deg, int start_len) {
   float rad = angle_deg * PI_F / 180.0f;
   int sx = cx + (int) lroundf(sinf(rad) * start_len);
@@ -461,7 +480,7 @@ void DisplayClock::canvas_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int 
   lv_draw_line(layer, dsc);
 }
 
-void DisplayClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
+void LvglClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *dsc, int cx, int cy,
                                        int R, float angle_deg, HandStyle style, Color color,
                                        int baton_width, float len_frac, float tail_frac) {
   int len = (int) (R * len_frac);
@@ -469,35 +488,17 @@ void DisplayClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *ds
   if (style == HAND_STYLE_BATON) {
     // circle -> line -> rounded rectangle: a thin stalk from the centre out
     // to where the thick baton begins, matching the reference (the baton
-    // doesn't start flush at the pivot).
+    // doesn't start flush at the pivot). Both drawn as round-capped lines so
+    // the rounded ends are rendered by LVGL consistently with the body (a
+    // separate hand-drawn end circle can't match LVGL's asymmetric integer
+    // width split and shows a ~1px step at some angles).
     int hub_r = std::max(2, R / 20);
     int stalk_len = hub_r * 3;
+    dsc->round_start = dsc->round_end = true;
     dsc->width = std::max(1, R / 35);
     this->canvas_hand_(layer, dsc, cx, cy, stalk_len, angle_deg);
-    // Draw the thick baton with flat caps and add its rounded ends as
-    // explicit circles centred exactly on the tip / junction. LVGL's round
-    // line-caps drift ~1px off the shaft axis at some angles on integer
-    // coordinates (LV_USE_FLOAT is off), which made the tip "ball" look
-    // offset; a filled circle on the endpoint is always symmetric.
     dsc->width = baton_width;
-    dsc->round_start = dsc->round_end = false;
     this->canvas_hand_(layer, dsc, cx, cy, len, angle_deg, stalk_len);
-    dsc->round_start = dsc->round_end = true;  // restore for the next hand
-    float rad = angle_deg * PI_F / 180.0f;
-    // radius so the ball's diameter (2r+1) matches the shaft width rather than
-    // bulging a pixel past it on each side.
-    int r = std::max(1, (baton_width - 1) / 2);
-    lv_draw_rect_dsc_t ball;
-    lv_draw_rect_dsc_init(&ball);
-    ball.radius = LV_RADIUS_CIRCLE;
-    ball.bg_color = dsc->color;
-    ball.bg_opa = LV_OPA_COVER;
-    for (int d : {stalk_len, len}) {  // junction, then tip
-      int bx = cx + (int) lroundf(sinf(rad) * d);
-      int by = cy - (int) lroundf(cosf(rad) * d);
-      lv_area_t a = {bx - r, by - r, bx + r, by + r};
-      lv_draw_rect(layer, &ball, &a);
-    }
     if (tail_frac > 0.0f)
       this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
     return;
@@ -530,13 +531,15 @@ void DisplayClock::canvas_analog_hand_(lv_layer_t *layer, lv_draw_line_dsc_t *ds
     lv_draw_rect(layer, &dot, &da);
     return;
   }
+  // plain line: `line` = flat/square ends, `line_rounded` = rounded ends.
   dsc->width = std::max(1, R / 50);
+  dsc->round_start = dsc->round_end = (style == HAND_STYLE_LINE_ROUNDED);
   this->canvas_hand_(layer, dsc, cx, cy, len, angle_deg);
   if (tail_frac > 0.0f)
     this->canvas_hand_(layer, dsc, cx, cy, (int) (R * tail_frac), angle_deg + 180.0f);
 }
 
-void DisplayClock::canvas_sbb_hand_(lv_layer_t *layer, int cx, int cy, int len, float angle_deg,
+void LvglClock::canvas_sbb_hand_(lv_layer_t *layer, int cx, int cy, int len, float angle_deg,
                                     Color color, int base_width) {
   // A plain rectangle, flat-cut ends (no rounding, no taper, no point) - a
   // single thick line with square caps, not 2 triangles (which showed a
@@ -549,7 +552,7 @@ void DisplayClock::canvas_sbb_hand_(lv_layer_t *layer, int cx, int cy, int len, 
   this->canvas_hand_(layer, &dsc, cx, cy, len, angle_deg);
 }
 
-void DisplayClock::canvas_center_(lv_layer_t *layer, int cx, int cy, int r, CenterStyle style,
+void LvglClock::canvas_center_(lv_layer_t *layer, int cx, int cy, int r, CenterStyle style,
                                   Color color) {
   if (style == CENTER_STYLE_NONE)
     return;
@@ -574,9 +577,9 @@ void DisplayClock::canvas_center_(lv_layer_t *layer, int cx, int cy, int r, Cent
   lv_draw_rect(layer, &d, &a2);
 }
 
-void DisplayClock::canvas_clockclock_(int w, int h) {
+void LvglClock::canvas_clockclock_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  this->fill_bg_();
   float cols = 8.0f + this->spacing_;
   float rows = 3.0f;
   // Odd diameter -> true centre pixel per clock (even => hands jump when spinning).
@@ -630,7 +633,7 @@ void DisplayClock::canvas_clockclock_(int w, int h) {
   lv_canvas_finish_layer(this->obj, &layer);
 }
 
-int DisplayClock::tick_width_(int R, TickSize s) {
+int LvglClock::tick_width_(int R, TickSize s) {
   switch (s) {
     case TICK_SIZE_SMALL:
       return std::max(1, R / 60);  // old minute-tick default
@@ -642,7 +645,7 @@ int DisplayClock::tick_width_(int R, TickSize s) {
   }
 }
 
-float DisplayClock::tick_inner_(TickSize s) {
+float LvglClock::tick_inner_(TickSize s) {
   switch (s) {
     case TICK_SIZE_SMALL:
       return 0.89f;  // old minute-tick default
@@ -654,9 +657,9 @@ float DisplayClock::tick_inner_(TickSize s) {
   }
 }
 
-void DisplayClock::canvas_analog_(int w, int h) {
+void LvglClock::canvas_analog_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  this->fill_bg_();
   int cx = w / 2, cy = h / 2;
   int R = std::min(w, h) / 2 - 1;
   if (R < 6)
@@ -734,7 +737,7 @@ void DisplayClock::canvas_analog_(int w, int h) {
   lv_canvas_finish_layer(this->obj, &layer);
 }
 
-void DisplayClock::canvas_draw_segment_(lv_layer_t *layer, int x, int y, int w, int h, bool horiz,
+void LvglClock::canvas_draw_segment_(lv_layer_t *layer, int x, int y, int w, int h, bool horiz,
                                         lv_color_t color) {
   if (this->segment_style_ == SEGMENT_STYLE_ROUNDED) {
     lv_draw_rect_dsc_t rd;
@@ -802,7 +805,7 @@ void DisplayClock::canvas_draw_segment_(lv_layer_t *layer, int x, int y, int w, 
 // Tiny vector "font" for the AM/PM markers - the 7-segment style is
 // deliberately font-free, so the letters are drawn as line strokes and
 // auto-scale with the widget like everything else. Only A/M/P exist.
-void DisplayClock::canvas_stroke_text_(lv_layer_t *layer, const char *txt, float x, float y,
+void LvglClock::canvas_stroke_text_(lv_layer_t *layer, const char *txt, float x, float y,
                                        float lw, float lh, lv_color_t color) {
   struct Stroke {
     char ch;
@@ -836,9 +839,9 @@ void DisplayClock::canvas_stroke_text_(lv_layer_t *layer, const char *txt, float
   }
 }
 
-void DisplayClock::canvas_digital_(int w, int h) {
+void LvglClock::canvas_digital_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  this->fill_bg_();
   DigitalCell cells[MAX_CELLS];
   int n = this->digital_cells_(w, h, cells);
   lv_color_t fg = to_lv(this->pointer_color_());
@@ -887,7 +890,7 @@ void DisplayClock::canvas_digital_(int w, int h) {
 // ---------------------------------------------------------------------------
 // flipclock - split-flap cards with font-rendered digits
 // ---------------------------------------------------------------------------
-void DisplayClock::flip_card_(lv_layer_t *layer, int x, int y, int w, int h, char ch, int clip_y1,
+void LvglClock::flip_card_(lv_layer_t *layer, int x, int y, int w, int h, char ch, int clip_y1,
                               int clip_y2, bool text_bottom) {
   if (clip_y1 > clip_y2)
     return;
@@ -943,9 +946,9 @@ void DisplayClock::flip_card_(lv_layer_t *layer, int x, int y, int w, int h, cha
   layer->_clip_area = saved;
 }
 
-void DisplayClock::canvas_flipclock_(int w, int h) {
+void LvglClock::canvas_flipclock_(int w, int h) {
   auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
-  lv_canvas_fill_bg(this->obj, to_lv(this->background_), LV_OPA_COVER);
+  this->fill_bg_();
   DigitalCell cells[MAX_CELLS];
   int n = this->digital_cells_(w, h, cells);
   uint32_t now = millis();
@@ -1049,5 +1052,187 @@ void DisplayClock::canvas_flipclock_(int w, int h) {
   lv_canvas_finish_layer(this->obj, &layer);
 }
 
-}  // namespace display_clock
+// ---------------------------------------------------------------------------
+// seg_matrix - big HH:MM digits on a 6 x 24 grid of small 7-segment displays.
+// The per-display segment patterns are the hand-crafted font from the
+// reference "7-segment display array clock" (hackaday.io/project/169632),
+// ported verbatim. Each byte is a MAX7219 no-decode segment mask
+// (bit6=A .. bit0=G); panel[x][y] with x = 0..5 (rows), y = 0..23 (columns).
+// ---------------------------------------------------------------------------
+namespace {
+void seg_matrix_build(uint8_t panel[6][24], int hh, int mm, bool colon) {
+  for (int x = 0; x < 6; x++)
+    for (int y = 0; y < 24; y++)
+      panel[x][y] = 0;
+  auto P = [&](int x, int y, uint8_t b) {
+    if (x >= 0 && x < 6 && y >= 0 && y < 24)
+      panel[x][y] = b;
+  };
+  auto A = [&](int x, int y, uint8_t b) {
+    if (x >= 0 && x < 6 && y >= 0 && y < 24)
+      panel[x][y] |= b;
+  };
+  auto F = [&](int x1, int y1, int x2, int y2, uint8_t b) {
+    for (int i = x1; i <= x2; i++)
+      for (int j = y1; j <= y2; j++)
+        P(i, j, b);
+  };
+  auto digit = [&](int place, int value) {
+    switch (value) {
+      case 0:
+        P(0, place + 2, 0b00011000); P(0, place + 3, 0b00111101); P(0, place + 4, 0b01111111);
+        P(0, place + 5, 0b00011111); P(1, place + 1, 0b00010000); F(1, place + 2, 1, place + 5, 0b01111111);
+        P(1, place + 3, 0b01100111); P(1, place + 4, 0b01111011); P(2, place + 2, 0b01101111);
+        P(2, place + 5, 0b01001111); P(2, place + 1, 0b01111101); P(2, place + 4, 0b00110000);
+        F(3, place + 1, 3, place + 4, 0b01111111); P(3, place + 3, 0b00010000); P(3, place + 2, 0b00000110);
+        A(3, place + 5, 0b00000110); F(4, place + 1, 4, place + 3, 0b01111111); P(4, place + 2, 0b00011111);
+        P(4, place + 4, 0b01000111); P(5, place + 1, 0b01110011); P(5, place + 2, 0b01111111);
+        P(5, place + 3, 0b01100111);
+        break;
+      case 1:
+        P(0, place + 3, 0b00010000); P(0, place + 4, 0b01111111); P(0, place + 5, 0b00011111);
+        F(1, place + 3, 1, place + 4, 0b01111111); P(1, place + 5, 0b00000110); P(2, place + 2, 0b00111101);
+        P(2, place + 3, 0b01111111); P(2, place + 4, 0b01001111); F(3, place + 2, 3, place + 3, 0b01111111);
+        P(3, place + 1, 0b00110000); P(3, place + 4, 0b00000110); F(4, place + 1, 4, place + 2, 0b01111111);
+        P(4, place + 3, 0b01000110); P(5, place + 0, 0b00100000); P(5, place + 1, 0b01111111);
+        P(5, place + 2, 0b01111111); P(5, place + 3, 0b00000000);
+        break;
+      case 2:
+        P(0, place + 2, 0b00011000); P(0, place + 3, 0b00111101); P(0, place + 4, 0b01111111);
+        P(0, place + 5, 0b00011111); P(1, place + 1, 0b00110000); P(1, place + 2, 0b01111111);
+        P(1, place + 3, 0b01100010); P(1, place + 4, 0b01111011); P(1, place + 5, 0b01111111);
+        P(2, place + 3, 0b00111000); P(2, place + 4, 0b01111111); P(2, place + 5, 0b01000110);
+        P(3, place + 2, 0b00111101); P(3, place + 3, 0b01111111); P(3, place + 4, 0b01000110);
+        A(4, place + 0, 0b00010000); F(4, place + 1, 4, place + 2, 0b01111111); P(4, place + 3, 0b01000110);
+        P(5, place + 0, 0b00100000); P(5, place + 1, 0b01110011); F(5, place + 2, 5, place + 3, 0b01111111);
+        P(5, place + 4, 0b01100111);
+        break;
+      case 3:
+        P(0, place + 2, 0b00011000); F(0, place + 3, 0, place + 4, 0b01111111); P(0, place + 5, 0b00011111);
+        P(1, place + 1, 0b00100000); P(1, place + 2, 0b01111111); P(1, place + 3, 0b01100010);
+        P(1, place + 4, 0b01111011); P(1, place + 5, 0b01111111); P(2, place + 2, 0b00011000);
+        F(2, place + 3, 4, place + 4, 0b01111111); P(2, place + 3, 0b00111101); P(2, place + 5, 0b01000110);
+        P(3, place + 2, 0b01100000); P(3, place + 3, 0b01110011); P(3, place + 5, 0b00000100);
+        P(4, place + 2, 0b00011101); P(4, place + 1, 0b00011000); P(4, place + 3, 0b00111101);
+        A(4, place + 5, 0b00000110); P(5, place + 0, 0b00100000); P(5, place + 1, 0b01110011);
+        F(5, place + 2, 5, place + 3, 0b01111111); P(5, place + 4, 0b01000010);
+        break;
+      case 4:
+        P(0, place + 2, 0b00111000); P(0, place + 3, 0b01111111); P(0, place + 4, 0b00010000);
+        P(0, place + 5, 0b01111111); P(1, place + 1, 0b00010000); F(1, place + 2, 2, place + 2, 0b01111111);
+        P(1, place + 3, 0b01000110); P(1, place + 4, 0b01111101); P(1, place + 5, 0b01001111);
+        P(2, place + 1, 0b01111101); P(2, place + 3, 0b00111000); P(2, place + 4, 0b01111111);
+        P(2, place + 5, 0b00000110); F(3, place + 1, 3, place + 4, 0b01111111); P(3, place + 5, 0b00000000);
+        A(3, place + 0, 0b00010000); P(4, place + 2, 0b00010000); P(4, place + 3, 0b01111111);
+        P(4, place + 4, 0b00000110); P(5, place + 2, 0b01111111); P(5, place + 3, 0b01100111);
+        break;
+      case 5:
+        P(0, place + 2, 0b00111101); F(0, place + 3, 0, place + 5, 0b01111111); P(1, place + 1, 0b00110000);
+        P(1, place + 2, 0b01111111); P(1, place + 3, 0b01011111); P(1, place + 4, 0b00001100);
+        P(2, place + 3, 0b01111111); P(2, place + 2, 0b01110011); P(2, place + 4, 0b01111111);
+        P(2, place + 5, 0b00000110); P(3, place + 3, 0b00110000); F(3, place + 4, 4, place + 4, 0b01111111);
+        P(3, place + 5, 0b00000110); F(4, place + 1, 4, place + 2, 0b00011101); P(4, place + 3, 0b00111101);
+        P(4, place + 5, 0b00000010); P(5, place + 0, 0b00100000); F(5, place + 1, 5, place + 2, 0b01111111);
+        P(5, place + 3, 0b01100111); P(5, place + 4, 0b01000010);
+        break;
+      case 6:
+        P(0, place + 3, 0b00011000); P(0, place + 4, 0b01111111); P(0, place + 5, 0b00000110);
+        F(1, place + 2, 2, place + 4, 0b01111111); P(1, place + 2, 0b00111101); P(1, place + 4, 0b01000010);
+        P(2, place + 1, 0b00111000); P(2, place + 5, 0b00000100); A(3, place + 0, 0b00010000);
+        F(3, place + 1, 4, place + 4, 0b01111111); P(3, place + 2, 0b01000110); P(3, place + 3, 0b01100000);
+        P(3, place + 5, 0b00000110); A(4, place + 0, 0b00110000); P(4, place + 2, 0b00011111);
+        P(4, place + 3, 0b00111101); P(5, place + 1, 0b01110011); P(5, place + 2, 0b01111111);
+        P(5, place + 3, 0b01100111);
+        break;
+      case 7:
+        P(0, place + 1, 0b00110000); F(0, place + 2, 0, place + 4, 0b01111111); P(0, place + 5, 0b00011111);
+        P(1, place + 1, 0b00100000); P(1, place + 2, 0b01100011); P(1, place + 3, 0b01100011);
+        P(1, place + 4, 0b01111111); P(1, place + 5, 0b01111111); P(2, place + 5, 0b01000110);
+        P(2, place + 4, 0b01111111); P(2, place + 3, 0b00111101); P(3, place + 2, 0b00111101);
+        P(3, place + 3, 0b01111111); P(3, place + 4, 0b01100111); P(4, place + 1, 0b00111101);
+        P(4, place + 2, 0b01111111); P(4, place + 3, 0b01000110); F(5, place + 1, 5, place + 2, 0b01111111);
+        P(5, place + 0, 0b00100000);
+        break;
+      case 8:
+        P(0, place + 2, 0b00011000); F(0, place + 3, 0, place + 4, 0b01111111); P(0, place + 5, 0b00011111);
+        P(1, place + 1, 0b00110000); P(1, place + 2, 0b01111111); P(1, place + 3, 0b01100010);
+        P(1, place + 4, 0b01111011); P(1, place + 5, 0b01111111); P(2, place + 1, 0b00100000);
+        P(2, place + 2, 0b01111111); F(2, place + 3, 4, place + 4, 0b01111111); P(2, place + 3, 0b00111101);
+        P(2, place + 5, 0b01000110); P(3, place + 1, 0b00111101); P(3, place + 2, 0b01100111);
+        P(3, place + 3, 0b01110011); P(3, place + 5, 0b00000100); P(4, place + 2, 0b00011101);
+        P(4, place + 1, 0b01111111); P(4, place + 3, 0b00111101); A(4, place + 5, 0b00000110);
+        A(4, place + 0, 0b00110000); P(5, place + 1, 0b01110011); F(5, place + 2, 5, place + 3, 0b01111111);
+        P(5, place + 4, 0b01000010);
+        break;
+      case 9:
+        P(0, place + 2, 0b00011101); P(0, place + 3, 0b01111111); P(0, place + 4, 0b00011111);
+        P(0, place + 5, 0b00001100); F(1, place + 1, 3, place + 4, 0b01111111); P(1, place + 1, 0b00111000);
+        P(1, place + 3, 0b01100011); P(1, place + 4, 0b01111011); P(1, place + 5, 0b01111111);
+        P(2, place + 2, 0b01011111); P(2, place + 3, 0b00011100); P(2, place + 5, 0b01001111);
+        P(3, place + 1, 0b01100000); P(3, place + 2, 0b01111011); P(3, place + 5, 0b00000010);
+        P(4, place + 1, 0b00011000); P(4, place + 2, 0b01111111); P(4, place + 3, 0b01100111);
+        P(5, place + 0, 0b00100000); P(5, place + 1, 0b01111111); P(5, place + 2, 0b01000110);
+        break;
+      default:
+        break;
+    }
+  };
+  digit(0, (hh / 10) % 10);
+  digit(5, hh % 10);
+  digit(13, (mm / 10) % 10);
+  digit(18, mm % 10);
+  if (colon) {
+    P(1, 12, 0b00011101);
+    P(4, 11, 0b00011101);
+  }
+}
+}  // namespace
+
+void LvglClock::canvas_seg_matrix_(int w, int h) {
+  auto to_lv = [](Color c) { return lv_color_make(c.r, c.g, c.b); };
+  this->fill_bg_();
+  const int COLS = 24, ROWS = 6;  // the reference panel / font is fixed at 6x24
+  int cw = w / COLS, ch = h / ROWS;
+  if (cw < 3 || ch < 5)
+    return;
+
+  int hh, mm, ss;
+  this->now_or_fake_hms_(hh, mm, ss);
+  bool colon = !(this->digital_blink_ && ((millis() / 1000) & 1));
+  uint8_t panel[6][24];
+  seg_matrix_build(panel, hh, mm, colon);
+
+  // Each small display keeps the 7-segment aspect (taller than wide), centred
+  // in its grid cell, so the little displays aren't stretched to the cell.
+  int dh = (int) (ch * 0.94f);
+  int dw = (int) (dh * 0.55f);
+  if (dw > (int) (cw * 0.94f)) {
+    dw = (int) (cw * 0.94f);
+    dh = (int) (dw / 0.55f);
+  }
+  int gx = (w - cw * COLS) / 2, gy = (h - ch * ROWS) / 2;
+
+  lv_color_t fg = to_lv(this->pointer_color_());
+  lv_color_t off = to_lv(this->digital_off_color_());
+  lv_layer_t layer;
+  lv_canvas_init_layer(this->obj, &layer);
+  for (int x = 0; x < ROWS; x++) {      // panel x -> screen row (vertical)
+    for (int y = 0; y < COLS; y++) {    // panel y -> screen column (horizontal)
+      uint8_t b = panel[x][y];
+      int dx = gx + y * cw + (cw - dw) / 2;
+      int dy = gy + x * ch + (ch - dh) / 2;
+      int rects[7][4];
+      bool act[7], horiz[7];
+      this->seg_rects_(8, dx, dy, dw, dh, rects, act, horiz);  // 8 = all seven present
+      for (int s = 0; s < 7; s++) {  // s: 0=a..6=g ; MAX7219 A=0x40 .. G=0x01
+        bool on = b & (0x40 >> s);
+        this->canvas_draw_segment_(&layer, rects[s][0], rects[s][1], rects[s][2], rects[s][3],
+                                   horiz[s], on ? fg : off);
+      }
+    }
+  }
+  lv_canvas_finish_layer(this->obj, &layer);
+}
+
+}  // namespace lvgl_clock
 }  // namespace esphome

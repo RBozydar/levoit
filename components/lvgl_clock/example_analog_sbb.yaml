@@ -1,9 +1,9 @@
-# display_clock - style: analog, exercising every shared and analog-specific
+# lvgl_clock - style: analog, exercising every shared and analog-specific
 # option (see README.md for the full reference).
-# Compile:  esphome compile components/display_clock/example_analog_sbb.yaml
+# Compile:  esphome compile components/lvgl_clock/example_analog_sbb.yaml
 
 esphome:
-  name: display-clock-analog
+  name: lvgl-clock-analog
 
 packages:
   base: !include common_base.yaml
@@ -29,11 +29,11 @@ color:
 lvgl:
   bg_color: cc_white
   widgets:
-    - display_clock:
+    - lvgl_clock:
         id: dc
         time_id: sntp_time
-        width: 215
-        height: 215
+        width: 320
+        height: 320
         align: CENTER
         style: analog
         twenty_four_hour: true        # false = 1-12

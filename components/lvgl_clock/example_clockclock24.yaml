@@ -1,9 +1,9 @@
-# display_clock - style: clockclock24 (24 tiny analogue clocks), with the
+# lvgl_clock - style: clockclock24 (24 tiny analogue clocks), with the
 # idle-animation actions driven from a boot-phase interval.
-# Compile:  esphome compile components/display_clock/example_clockclock24.yaml
+# Compile:  esphome compile components/lvgl_clock/example_clockclock24.yaml
 
 esphome:
-  name: display-clock-lvgl
+  name: lvgl-clock-lvgl
 
 packages:
   base: !include common_base.yaml
@@ -12,11 +12,11 @@ packages:
 
 lvgl:
   widgets:
-    - display_clock:
+    - lvgl_clock:
         id: dc
         time_id: sntp_time
-        width: 300
-        height: 150
+        width: 480
+        height: 320
         align: CENTER
         style: clockclock24
         foreground: cc_hands
@@ -28,6 +28,7 @@ lvgl:
           show_face: true
           face_color: cc_faces
           border_color: cc_faces
+          
 
 interval:
   # boot phases: spin while connecting, birds while waiting for NTP, then the
@@ -38,12 +39,12 @@ interval:
           condition:
             lambda: "return id(sntp_time).now().is_valid();"
           then:
-            - display_clock.show_time: dc
+            - lvgl_clock.show_time: dc
           else:
             - if:
                 condition:
                   wifi.connected:
                 then:
-                  - display_clock.flying_birds: dc
+                  - lvgl_clock.flying_birds: dc
                 else:
-                  - display_clock.rotate_left: dc
+                  - lvgl_clock.rotate_left: dc

@@ -20,9 +20,9 @@ from esphome.const import (
 CODEOWNERS = ["@tuct"]
 # A bare marker: this key exists only so ESPHome imports this Python module
 # (component modules are only imported when their domain appears as a
-# top-level YAML key), which registers the `display_clock` widget type below
+# top-level YAML key), which registers the `lvgl_clock` widget type below
 # before `lvgl:` validates its `widgets:` list. It takes no options - the
-# actual clock lives under `lvgl: widgets: - display_clock: ...`.
+# actual clock lives under `lvgl: widgets: - lvgl_clock: ...`.
 DEPENDENCIES = ["lvgl"]
 
 CONFIG_SCHEMA = cv.Schema({})
@@ -32,62 +32,64 @@ async def to_code(config):
     pass
 
 
-display_clock_ns = cg.esphome_ns.namespace("display_clock")
-DisplayClock = display_clock_ns.class_("DisplayClock", cg.Component, LvCompound)
-# Same fully-qualified type as `DisplayClock` above (by construction, not just
-# by name) so `cv.use_id(DisplayClock)` in the mode actions below resolves
+lvgl_clock_ns = cg.esphome_ns.namespace("lvgl_clock")
+LvglClock = lvgl_clock_ns.class_("LvglClock", cg.Component, LvCompound)
+# Same fully-qualified type as `LvglClock` above (by construction, not just
+# by name) so `cv.use_id(LvglClock)` in the mode actions below resolves
 # against widget ids declared with this type - see MockObjClass.inherits_from,
 # which compares these by str(). `cg.Component` must be listed here too:
 # config.py only adds a declared id to CORE.component_ids (and therefore lets
 # cg.register_component() accept it) when its declared type inherits_from
 # Component - WidgetType.create_to_code() never registers compound widgets as
-# components on its own, so without this DisplayClock::setup()/loop() would
+# components on its own, so without this LvglClock::setup()/loop() would
 # simply never run.
-lv_display_clock_t = LvType(str(DisplayClock), parents=(LvCompound, cg.Component))
+lv_lvgl_clock_t = LvType(str(LvglClock), parents=(LvCompound, cg.Component))
 lv_draw_buf_t = LvType("lv_draw_buf_t")
-SetModeAction = display_clock_ns.class_("SetModeAction", automation.Action)
+SetModeAction = lvgl_clock_ns.class_("SetModeAction", automation.Action)
 ColorStruct = cg.esphome_ns.struct("Color")
 
-ClockStyle = display_clock_ns.enum("ClockStyle")
+ClockStyle = lvgl_clock_ns.enum("ClockStyle")
 STYLES = {
     "clockclock24": ClockStyle.STYLE_CLOCKCLOCK24,
     "analog": ClockStyle.STYLE_ANALOG,
     "digital": ClockStyle.STYLE_DIGITAL,
     "flipclock": ClockStyle.STYLE_FLIPCLOCK,
+    "seg_matrix": ClockStyle.STYLE_SEG_MATRIX,
 }
-HandStyle = display_clock_ns.enum("HandStyle")
+HandStyle = lvgl_clock_ns.enum("HandStyle")
 HAND_STYLES = {
     "baton": HandStyle.HAND_STYLE_BATON,
     "line": HandStyle.HAND_STYLE_LINE,
+    "line_rounded": HandStyle.HAND_STYLE_LINE_ROUNDED,
     "lollipop": HandStyle.HAND_STYLE_LOLLIPOP,
     "sbb": HandStyle.HAND_STYLE_SBB,
 }
-CenterStyle = display_clock_ns.enum("CenterStyle")
+CenterStyle = lvgl_clock_ns.enum("CenterStyle")
 CENTER_STYLES = {
     "circle": CenterStyle.CENTER_STYLE_CIRCLE,
     "round": CenterStyle.CENTER_STYLE_ROUND,
     "none": CenterStyle.CENTER_STYLE_NONE,
 }
-SegmentStyle = display_clock_ns.enum("SegmentStyle")
+SegmentStyle = lvgl_clock_ns.enum("SegmentStyle")
 SEGMENT_STYLES = {
     "classic": SegmentStyle.SEGMENT_STYLE_CLASSIC,
     "rounded": SegmentStyle.SEGMENT_STYLE_ROUNDED,
 }
-TickSize = display_clock_ns.enum("TickSize")
+TickSize = lvgl_clock_ns.enum("TickSize")
 TICK_SIZES = {
     "s": TickSize.TICK_SIZE_SMALL,
     "m": TickSize.TICK_SIZE_MEDIUM,
     "l": TickSize.TICK_SIZE_LARGE,
 }
 
-ClockMode = display_clock_ns.enum("ClockMode")
+ClockMode = lvgl_clock_ns.enum("ClockMode")
 MODES = {
     "time": ClockMode.CC_MODE_TIME,
     "rotate_left": ClockMode.CC_MODE_ROTATE_LEFT,
     "flying_birds": ClockMode.CC_MODE_FLYING_BIRDS,
     "demo": ClockMode.CC_MODE_DEMO,
 }
-MovementMode = display_clock_ns.enum("MovementMode")
+MovementMode = lvgl_clock_ns.enum("MovementMode")
 MOVEMENTS = {
     "opposite": MovementMode.CC_MOVE_OPPOSITE,
     "clockwise": MovementMode.CC_MOVE_CLOCKWISE,
@@ -101,12 +103,14 @@ CONF_CLOCKCLOCK24 = "clockclock24"
 CONF_ANALOG = "analog"
 CONF_DIGITAL = "digital"
 CONF_FLIPCLOCK = "flipclock"
+CONF_SEG_MATRIX = "seg_matrix"
 
 # shared
 CONF_TWENTY_FOUR_HOUR = "twenty_four_hour"
 CONF_SHOW_FACE = "show_face"
 CONF_FOREGROUND = "foreground"  # the "ink": hands / markers / digits
 CONF_BACKGROUND = "background"  # behind everything
+CONF_TRANSPARENT = "transparent"  # clear to transparent instead of background
 CONF_SHOW_SECONDS = "show_seconds"
 CONF_RENDER_INTERVAL = "render_interval"
 # face colours (styles that draw a dial / clock faces)
@@ -161,7 +165,7 @@ CLOCKCLOCK24_SCHEMA = cv.Schema(
         cv.Optional(CONF_MOVEMENT, default="opposite"): cv.enum(MOVEMENTS, lower=True),
         cv.Optional(CONF_MODE, default="time"): cv.enum(MODES, lower=True),
         cv.Optional(CONF_MODE_SPEED, default=1.0): cv.positive_float,
-        cv.Optional(CONF_SPACING, default=0.6): cv.float_range(min=0.0, max=4.0),
+        cv.Optional(CONF_SPACING, default=0.0): cv.float_range(min=0.0, max=4.0),
         # testing aid for `mode: demo` - how often the fake minute advances
         cv.Optional(
             CONF_DEMO_INTERVAL, default="5s"
@@ -224,6 +228,17 @@ DIGITAL_SCHEMA = cv.Schema(
     }
 )
 
+# big HH:MM digits drawn on the reference 6x24 grid of small 7-segment displays
+SEG_MATRIX_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_SEGMENT_STYLE, default="classic"): cv.enum(
+            SEGMENT_STYLES, lower=True
+        ),
+        # colour of the unlit small segments (the "ghost" grid)
+        cv.Optional(CONF_OFF_COLOR): cv.use_id(ColorStruct),
+    }
+)
+
 FLIPCLOCK_SCHEMA = cv.Schema(
     {
         # a built-in LVGL font name (e.g. "montserrat_48") or an ESPHome
@@ -250,12 +265,19 @@ FLIPCLOCK_SCHEMA = cv.Schema(
 def _resolve_style(config):
     sub_blocks = [
         k
-        for k in (CONF_CLOCKCLOCK24, CONF_ANALOG, CONF_DIGITAL, CONF_FLIPCLOCK)
+        for k in (
+            CONF_CLOCKCLOCK24,
+            CONF_ANALOG,
+            CONF_DIGITAL,
+            CONF_FLIPCLOCK,
+            CONF_SEG_MATRIX,
+        )
         if k in config
     ]
     if len(sub_blocks) > 1:
         raise cv.Invalid(
-            f"Only one of clockclock24/analog/digital/flipclock may be set, got: {', '.join(sub_blocks)}"
+            "Only one of clockclock24/analog/digital/flipclock/seg_matrix may be set, "
+            f"got: {', '.join(sub_blocks)}"
         )
 
     style = config.get(CONF_STYLE)
@@ -288,14 +310,19 @@ WIDGET_SCHEMA = (
             cv.Optional(CONF_TWENTY_FOUR_HOUR, default=True): cv.boolean,
             cv.Optional(CONF_SHOW_SECONDS, default=False): cv.boolean,
             cv.Optional(
-                CONF_RENDER_INTERVAL, default="33ms"
+                CONF_RENDER_INTERVAL, default="16ms"
             ): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_FOREGROUND): cv.use_id(ColorStruct),
             cv.Optional(CONF_BACKGROUND): cv.use_id(ColorStruct),
+            # transparent background - allocates an ARGB8888 canvas (4 bytes/px
+            # vs 2) so widgets behind the clock show through; `background` is
+            # then unused.
+            cv.Optional(CONF_TRANSPARENT, default=False): cv.boolean,
             cv.Optional(CONF_CLOCKCLOCK24): CLOCKCLOCK24_SCHEMA,
             cv.Optional(CONF_ANALOG): ANALOG_SCHEMA,
             cv.Optional(CONF_DIGITAL): DIGITAL_SCHEMA,
             cv.Optional(CONF_FLIPCLOCK): FLIPCLOCK_SCHEMA,
+            cv.Optional(CONF_SEG_MATRIX): SEG_MATRIX_SCHEMA,
         }
     ).add_extra(_resolve_style)
 )
@@ -312,11 +339,11 @@ async def _apply_face(var, c):
     await _set_color(var, c, CONF_BORDER_COLOR, var.set_face_border_color)
 
 
-class DisplayClockWidgetType(WidgetType):
+class LvglClockWidgetType(WidgetType):
     def __init__(self):
         super().__init__(
-            "display_clock",
-            lv_display_clock_t,
+            "lvgl_clock",
+            lv_lvgl_clock_t,
             (CONF_MAIN,),
             schema=WIDGET_SCHEMA,
             modify_schema={},
@@ -333,18 +360,23 @@ class DisplayClockWidgetType(WidgetType):
     async def to_code(self, w: Widget, config):
         # WidgetType.create_to_code() only constructs compound widgets - it
         # doesn't register them as ESPHome components, so without this
-        # DisplayClock::setup()/loop() (and therefore render_()) never run.
+        # LvglClock::setup()/loop() (and therefore render_()) never run.
         await cg.register_component(w.var, config)
 
         width = config[CONF_WIDTH]
         height = config[CONF_HEIGHT]
+        # A transparent clock needs an alpha channel, so use ARGB8888 (4 bytes/
+        # px) instead of the native RGB565 (2 bytes/px) - the C++ side then
+        # clears each frame to transparent instead of the background colour.
+        transparent = config[CONF_TRANSPARENT]
+        cf = "LV_COLOR_FORMAT_ARGB8888" if transparent else "LV_COLOR_FORMAT_NATIVE"
         draw_buf = cg.new_Pvariable(config[CONF_DRAW_BUF_ID])
-        buf_size = literal(f"LV_DRAW_BUF_SIZE({width}, {height}, LV_COLOR_FORMAT_NATIVE)")
+        buf_size = literal(f"LV_DRAW_BUF_SIZE({width}, {height}, {cf})")
         lv.draw_buf_init(
             draw_buf,
             width,
             height,
-            literal("LV_COLOR_FORMAT_NATIVE"),
+            literal(cf),
             0,
             lv_expr.malloc_core(buf_size),
             literal(buf_size),
@@ -352,6 +384,7 @@ class DisplayClockWidgetType(WidgetType):
         lv.draw_buf_set_flag(draw_buf, literal("LV_IMAGE_FLAGS_MODIFIABLE"))
         lv.canvas_set_draw_buf(w.obj, draw_buf)
         lv_add(w.var.set_canvas_size(width, height))
+        lv_add(w.var.set_transparent(transparent))
 
         lv_add(w.var.set_time(await cg.get_variable(config[CONF_TIME_ID])))
         style = config[CONF_STYLE]
@@ -417,13 +450,17 @@ class DisplayClockWidgetType(WidgetType):
             # the divider dots + leading zero reuse the digital-style plumbing
             lv_add(w.var.set_digital_blink(c[CONF_BLINK]))
             lv_add(w.var.set_digital_blank_leading(c[CONF_BLANK_LEADING_ZERO]))
+        elif CONF_SEG_MATRIX in config:
+            c = config[CONF_SEG_MATRIX]
+            lv_add(w.var.set_segment_style(c[CONF_SEGMENT_STYLE]))
+            await _set_color(w.var, c, CONF_OFF_COLOR, w.var.set_digital_off_color)
 
 
-DisplayClockWidgetType()
+LvglClockWidgetType()
 
 
 # --- Actions (clockclock24 idle modes) --------------------------------------
-_ACTION_SCHEMA = automation.maybe_simple_id({cv.GenerateID(): cv.use_id(DisplayClock)})
+_ACTION_SCHEMA = automation.maybe_simple_id({cv.GenerateID(): cv.use_id(LvglClock)})
 
 
 def _register_mode_action(action, mode):
@@ -435,7 +472,7 @@ def _register_mode_action(action, mode):
     return _to_code
 
 
-_show_time = _register_mode_action("display_clock.show_time", MODES["time"])
-_rotate_left = _register_mode_action("display_clock.rotate_left", MODES["rotate_left"])
-_flying_birds = _register_mode_action("display_clock.flying_birds", MODES["flying_birds"])
-_demo = _register_mode_action("display_clock.demo", MODES["demo"])
+_show_time = _register_mode_action("lvgl_clock.show_time", MODES["time"])
+_rotate_left = _register_mode_action("lvgl_clock.rotate_left", MODES["rotate_left"])
+_flying_birds = _register_mode_action("lvgl_clock.flying_birds", MODES["flying_birds"])
+_demo = _register_mode_action("lvgl_clock.demo", MODES["demo"])

@@ -1,9 +1,9 @@
-# display_clock - style: analog, exercising every shared and analog-specific
+# lvgl_clock - style: analog, exercising every shared and analog-specific
 # option (see README.md for the full reference).
-# Compile:  esphome compile components/display_clock/example_analog.yaml
+# Compile:  esphome compile components/lvgl_clock/example_analog.yaml
 
 esphome:
-  name: display-clock-analog
+  name: lvgl-clock-analog
 
 packages:
   base: !include common_base.yaml
@@ -25,21 +25,37 @@ color:
     red: 40%
     green: 40%
     blue: 40%
-
+  - id: cc_ticks_major
+    red: 60%
+    green: 60%
+    blue: 60%
 lvgl:
   widgets:
-    - display_clock:
+    # A plain LVGL label for the date - nothing to do with lvgl_clock, just
+    # another widget. Listed BEFORE the lvgl_clock widget so it draws behind
+    # it; with the clock's `transparent: true` the date shows through the gaps
+    # between the hands/ticks. Updated from the time component by interval:.
+    - label:
+        id: date_label
+        align: CENTER
+        y: 70                        # px below the clock centre
+        text_font: montserrat_24
+        text_color: cc_hands
+        text: ""
+
+    - lvgl_clock:
         id: dc
         time_id: sntp_time
-        width: 221
-        height: 221
+        width: 320
+        height: 320
         align: CENTER
         style: analog
         twenty_four_hour: true        # false = 1-12
         foreground: cc_hands          # default "ink" - hour/minute hands, hub
-        background: cc_bg
+        transparent: true             # clear canvas to transparent (ARGB8888,
+                                      # 4 bytes/px) so the date behind shows through
         show_seconds: true            # sweeping second hand
-        render_interval: 33ms         # how often the widget redraws itself
+#        render_interval: 33ms         # how often the widget redraws itself
         analog:
           show_face: false
           face_color: cc_faces               # dial fill (needs show_face)
@@ -52,10 +68,10 @@ lvgl:
             length: s                             # s | m | l
           hour_ticks:                        # 12 bold 5-min/hour ticks
             enabled: true
-            color: cc_hands                     # defaults to border_color
+            color: cc_ticks_major                     # defaults to border_color
             rounded: false
             width: l
-            length: s
+            length: m
           hour_hand:
             style: baton     # baton | line | lollipop | sbb 
             color: cc_hands   # defaults to foreground
@@ -71,3 +87,16 @@ lvgl:
             color: cc_second     # defaults to red
             center_style: circle # circle | round | none
             extend: 20% # extend hand to other side, max 50%
+
+# Refresh the date text. It only changes once a day, so a slow interval is
+# plenty; the first tick fills it in shortly after boot / time sync.
+interval:
+  - interval: 30s
+    then:
+      - lvgl.label.update:
+          id: date_label
+          text: !lambda |-
+            auto t = id(sntp_time).now();
+            if (!t.is_valid())
+              return std::string("");
+            return t.strftime("%d %b");
