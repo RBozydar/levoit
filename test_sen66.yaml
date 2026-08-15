@@ -1,0 +1,49 @@
+esphome:
+  name: sen66-test
+  friendly_name: SEN66 Test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [sen6x]
+
+i2c:
+  id: bus_b
+  sda: GPIO26
+  scl: GPIO27
+  scan: true
+  frequency: 100kHz
+
+sensor:
+  - platform: sen6x
+    i2c_id: bus_b
+    id: sen66_test
+
+    pm_1_0:
+      name: "PM1.0"
+    pm_2_5:
+      name: "PM2.5"
+    pm_4_0:
+      name: "PM4.0"
+    pm_10_0:
+      name: "PM10"
+    temperature:
+      name: "Temperature"
+    humidity:
+      name: "Humidity"
+    voc:
+      name: "VOC"
+    nox:
+      name: "NOx"
+    co2:
+      name: "CO2"
+
+    update_interval: 10s
